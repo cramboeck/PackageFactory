@@ -183,7 +183,7 @@ function Verb-Noun {
 - Write Pester tests for all new functionality
 - Maintain or improve code coverage
 - Test on both Windows PowerShell 5.1 and PowerShell 7.x
-- Test on Windows, Linux (where applicable)
+- All tests run on Windows (PackageFactory is Windows-specific)
 
 ## Branch Strategy
 

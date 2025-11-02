@@ -9,23 +9,16 @@ on:
 jobs:
   test:
     name: Test PowerShell Module
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     strategy:
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
         powershell-version: ['5.1', '7.x']
-        exclude:
-          # PowerShell 5.1 is Windows only
-          - os: ubuntu-latest
-            powershell-version: '5.1'
-          - os: macos-latest
-            powershell-version: '5.1'
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup PowerShell
+      - name: Setup PowerShell 7
         if: matrix.powershell-version == '7.x'
         uses: actions/setup-powershell@v1
 
@@ -50,7 +43,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results-${{ matrix.os }}-ps${{ matrix.powershell-version }}
+          name: test-results-ps${{ matrix.powershell-version }}
           path: testResults.xml
 
   analyze:
