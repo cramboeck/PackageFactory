@@ -28,13 +28,16 @@
 body[data-theme="dark"] {
     --bg-body: linear-gradient(135deg, #1a1a1a 0%, #2d3142 100%);
     --bg-container: #2d3142;
-    --bg-input: #1a1a1a;
+    --bg-input: #3a3f52;
     --text-primary: #e8e8e8;
-    --text-secondary: #bfc0c0;
+    --text-secondary: #b0b3ba;
     --border: #4f5d75;
     --shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.6);
     --header-gradient: linear-gradient(135deg, #ff6b35 0%, #d85a2a 100%);
+    --light-bg: #3a3f52;
+    --dark-text: #e8e8e8;
+    --border-color: #4f5d75;
 }
 
 * {
@@ -247,13 +250,14 @@ body {
 }
 
 .modal-content {
-    background: white;
+    background: var(--bg-container);
     border-radius: 12px;
     box-shadow: var(--shadow-lg);
     width: 90%;
     max-width: 600px;
     max-height: 90vh;
     overflow: auto;
+    color: var(--text-primary);
 }
 
 .modal-content.modal-large {
@@ -298,13 +302,14 @@ body {
 /* Packages List */
 .package-item {
     padding: 20px;
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--border);
     border-radius: 8px;
     margin-bottom: 15px;
     display: flex;
     justify-content: space-between;
     align-items: center;
     transition: box-shadow 0.3s;
+    background: var(--bg-input);
 }
 
 .package-item:hover {
@@ -317,7 +322,7 @@ body {
 }
 
 .package-info p {
-    color: var(--secondary-color);
+    color: var(--text-secondary);
     font-size: 0.9em;
 }
 
@@ -427,14 +432,15 @@ body {
 
 .logs-filters label {
     font-weight: 600;
-    color: var(--dark-text);
+    color: var(--text-primary);
 }
 
 .logs-filters select {
     padding: 8px 12px;
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--border);
     border-radius: 4px;
-    background: white;
+    background: var(--bg-input);
+    color: var(--text-primary);
     font-size: 14px;
     cursor: pointer;
 }
@@ -606,7 +612,7 @@ body {
 }
 
 .details-value {
-    color: var(--dark-text);
+    color: var(--text-primary);
     font-family: 'Consolas', monospace;
 }
 
@@ -662,7 +668,7 @@ body {
 }
 
 .file-tree {
-    background: #f5f5f5;
+    background: var(--bg-input);
     padding: 15px;
     border-radius: 6px;
     font-family: 'Consolas', monospace;
@@ -672,16 +678,16 @@ body {
 
 .file-tree-item {
     padding: 3px 0;
-    color: #333;
+    color: var(--text-primary);
 }
 
 .file-tree-item.folder {
-    color: #0078d4;
+    color: #5ba3e0;
     font-weight: 600;
 }
 
 .file-tree-item.file {
-    color: #666;
+    color: var(--text-secondary);
 }
 
 .success-banner {
