@@ -843,8 +843,22 @@ Start-PodeServer {
 
         # Extract installer type and parameters
         $installerType = "unknown"
-        if ($deployContent -match "Start-ADTMsiProcess") { $installerType = "msi" }
-        elseif ($deployContent -match "Start-ADTProcess") { $installerType = "exe" }
+        $installerFilename = ""
+
+        if ($deployContent -match "Start-ADTMsiProcess") {
+            $installerType = "msi"
+            # Extract MSI filename from: Join-Path -Path $adtSession.DirFiles -ChildPath "filename.msi"
+            if ($deployContent -match 'Join-Path -Path \$adtSession\.DirFiles -ChildPath "([^"]+\.msi)"') {
+                $installerFilename = $Matches[1]
+            }
+        }
+        elseif ($deployContent -match "Start-ADTProcess") {
+            $installerType = "exe"
+            # Extract EXE filename from: Join-Path -Path $adtSession.DirFiles -ChildPath "filename.exe"
+            if ($deployContent -match 'Join-Path -Path \$adtSession\.DirFiles -ChildPath "([^"]+\.exe)"') {
+                $installerFilename = $Matches[1]
+            }
+        }
 
         # Read detection script if exists
         $detectionRule = ""
@@ -885,6 +899,7 @@ Start-PodeServer {
                 revision = $appRevision
                 companyPrefix = $companyPrefix
                 installerType = $installerType
+                installerFilename = $installerFilename
                 installCommand = $installCmd
                 uninstallCommand = $uninstallCmd
                 detectionKey = $detectionKey

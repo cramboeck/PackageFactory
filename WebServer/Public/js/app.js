@@ -528,6 +528,17 @@ async function useAsTemplate(packageName) {
                 if (typeof updateInstallerFields === 'function') {
                     updateInstallerFields();
                 }
+
+                // Set installer filename based on type
+                if (pkg.installerFilename) {
+                    if (installerType === 'msi') {
+                        const msiFilenameField = document.getElementById('msiFilename');
+                        if (msiFilenameField) msiFilenameField.value = pkg.installerFilename;
+                    } else if (installerType === 'exe') {
+                        const exeFilenameField = document.getElementById('exeFilename');
+                        if (exeFilenameField) exeFilenameField.value = pkg.installerFilename;
+                    }
+                }
             }
         }
 
