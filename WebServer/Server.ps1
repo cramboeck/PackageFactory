@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    Package Factory v2.0 - Pode Web Server
+    PackageFactory v2.1 - Pode Web Server
 .DESCRIPTION
     Web server with API endpoints for package generation
 .NOTES
     Author: Christoph Ramboeck (c@ramboeck.it)
-    Version: 2.0.0
+    Version: 2.1.0
 #>
 
 param(
