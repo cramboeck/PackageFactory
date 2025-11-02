@@ -654,6 +654,30 @@ Start-PodeServer {
         Write-PodeJsonResponse -Value @{ success = $true; message = "Configuration saved" }
     }
 
+    # API: Get version info
+    Add-PodeRoute -Method Get -Path '/api/version' -ScriptBlock {
+        $rootPath = $using:RootPath
+        $versionFile = Join-Path $rootPath "VERSION.txt"
+        $version = "2.2.1"
+        $buildDate = "2025-11-02"
+
+        if (Test-Path $versionFile) {
+            $content = Get-Content $versionFile -Raw
+            if ($content -match 'PackageFactory v([\d\.]+)') {
+                $version = $Matches[1]
+            }
+            if ($content -match 'Build Date: ([\d\-]+)') {
+                $buildDate = $Matches[1]
+            }
+        }
+
+        Write-PodeJsonResponse -Value @{
+            version = $version
+            buildDate = $buildDate
+            fullVersion = "PackageFactory v$version"
+        }
+    }
+
     # API: Get logs
     Add-PodeRoute -Method Get -Path '/api/logs' -ScriptBlock {
         $limit = $WebEvent.Query['limit']

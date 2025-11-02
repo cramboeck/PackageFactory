@@ -4,6 +4,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     loadConfig();
     initTheme();
+    loadVersion();
 });
 
 // API Base URL
@@ -111,6 +112,22 @@ async function loadConfig() {
         window.currentConfig = config;
     } catch (error) {
         console.error('Failed to load config:', error);
+    }
+}
+
+// Load version info
+async function loadVersion() {
+    try {
+        const response = await fetch(`${API_BASE}/api/version`);
+        const versionInfo = await response.json();
+
+        const versionElement = document.getElementById('app-version');
+        if (versionElement) {
+            versionElement.textContent = `Package Factory v${versionInfo.version}`;
+            versionElement.title = `Build Date: ${versionInfo.buildDate}`;
+        }
+    } catch (error) {
+        console.error('Failed to load version:', error);
     }
 }
 
