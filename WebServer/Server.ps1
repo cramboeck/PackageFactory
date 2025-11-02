@@ -658,14 +658,51 @@ Start-PodeServer {
     Add-PodeRoute -Method Get -Path '/api/logs' -ScriptBlock {
         $limit = $WebEvent.Query['limit']
         $level = $WebEvent.Query['level']
+        $logPath = $using:LogPath
 
-        # Get LogBuffer reference first, then call ToArray()
-        $logBuffer = $using:LogBuffer
-        $logs = $logBuffer.ToArray()
+        $logs = @()
 
-        # Ensure logs is always an array (not null)
-        if (-not $logs) {
-            $logs = @()
+        # Read logs from file if it exists
+        if (Test-Path $logPath) {
+            try {
+                $logContent = Get-Content -Path $logPath -Raw -ErrorAction SilentlyContinue
+
+                if ($logContent) {
+                    # Parse CMTrace log format
+                    # Format: <![LOG[Message]LOG]!><time="HH:MM:SS.mmm+000" date="MM-DD-YYYY" component="Component" context="" type="1" thread="1234" file="File:Line">
+                    $logLines = $logContent -split "`n" | Where-Object { $_ -match '<!\[LOG\[' }
+
+                    foreach ($line in $logLines) {
+                        if ($line -match '<!\[LOG\[(.*?)\]LOG\]!><time="(.*?)" date="(.*?)" component="(.*?)".*?type="(.*?)".*?file="(.*?)"') {
+                            $message = $Matches[1]
+                            $time = $Matches[2]
+                            $date = $Matches[3]
+                            $component = $Matches[4]
+                            $type = $Matches[5]
+                            $file = $Matches[6]
+
+                            # Map type to level
+                            $levelText = switch ($type) {
+                                "1" { "Info" }
+                                "2" { "Warning" }
+                                "3" { "Error" }
+                                default { "Info" }
+                            }
+
+                            $logs += @{
+                                Timestamp = "$date $time"
+                                Level = $levelText
+                                Component = $component
+                                Message = $message
+                                File = $file
+                            }
+                        }
+                    }
+                }
+            }
+            catch {
+                Write-Warning "Failed to read log file: $_"
+            }
         }
 
         # Filter by level if specified
@@ -681,7 +718,7 @@ Start-PodeServer {
             }
         }
 
-        # Ensure logs is still an array after filtering (Where-Object can return null)
+        # Ensure logs is still an array
         if (-not $logs) {
             $logs = @()
         }

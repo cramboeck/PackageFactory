@@ -284,14 +284,14 @@ async function showPackages() {
                         <p>Path: ${pkg.path}</p>
                     </div>
                     <div class="package-actions">
-                        <button class="btn btn-primary" onclick="viewPackageDetails('${pkg.name}')">
-                            📋 Details
+                        <button class="btn-icon btn-icon-primary" onclick="viewPackageDetails('${pkg.name}')" title="View Details">
+                            📋
                         </button>
-                        <button class="btn btn-secondary" onclick="useAsTemplate('${pkg.name}')">
-                            📑 Use as Template
+                        <button class="btn-icon btn-icon-secondary" onclick="useAsTemplate('${pkg.name}')" title="Use as Template">
+                            📑
                         </button>
-                        <button class="btn btn-danger" onclick="deletePackage('${pkg.name}')">
-                            🗑️ Delete
+                        <button class="btn-icon btn-icon-danger" onclick="deletePackage('${pkg.name}')" title="Delete Package">
+                            🗑️
                         </button>
                     </div>
                 </div>
