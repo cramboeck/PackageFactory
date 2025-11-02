@@ -262,6 +262,37 @@ body {
     border-color: #c82333;
 }
 
+/* Validation Badges */
+.validation-badge {
+    display: inline-block;
+    font-size: 0.9em;
+    margin-left: 8px;
+    cursor: help;
+    vertical-align: middle;
+}
+
+.validation-badge-valid {
+    opacity: 0.8;
+}
+
+.validation-badge-warning {
+    animation: pulse-warning 2s ease-in-out infinite;
+}
+
+.validation-badge-error {
+    animation: pulse-error 2s ease-in-out infinite;
+}
+
+@keyframes pulse-warning {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+@keyframes pulse-error {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
 .form-actions {
     display: flex;
     gap: 15px;

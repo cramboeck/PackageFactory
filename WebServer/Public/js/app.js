@@ -293,30 +293,75 @@ async function showPackages() {
         if (packages.length === 0) {
             packagesList.innerHTML = '<p class="text-center">No packages created yet.</p>';
         } else {
-            packagesList.innerHTML = packages.map(pkg => `
-                <div class="package-item">
-                    <div class="package-info">
-                        <h3>${pkg.name}</h3>
-                        <p>Created: ${pkg.created}</p>
-                        <p>Path: ${pkg.path}</p>
+            // Load packages with validation status
+            const packagesWithValidation = await Promise.all(packages.map(async pkg => {
+                try {
+                    const validationResponse = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(pkg.name)}/validate`);
+                    const validation = await validationResponse.json();
+                    return { ...pkg, validation };
+                } catch (error) {
+                    return { ...pkg, validation: { status: 'unknown', valid: null } };
+                }
+            }));
+
+            packagesList.innerHTML = packagesWithValidation.map(pkg => {
+                const validationBadge = getValidationBadge(pkg.validation);
+                return `
+                    <div class="package-item">
+                        <div class="package-info">
+                            <h3>${pkg.name} ${validationBadge}</h3>
+                            <p>Created: ${pkg.created}</p>
+                            <p>Path: ${pkg.path}</p>
+                        </div>
+                        <div class="package-actions">
+                            <button class="btn-icon btn-icon-primary" onclick="viewPackageDetails('${pkg.name}')" title="View Details">
+                                📋
+                            </button>
+                            <button class="btn-icon btn-icon-secondary" onclick="useAsTemplate('${pkg.name}')" title="Use as Template">
+                                📑
+                            </button>
+                            <button class="btn-icon btn-icon-danger" onclick="deletePackage('${pkg.name}')" title="Delete Package">
+                                🗑️
+                            </button>
+                        </div>
                     </div>
-                    <div class="package-actions">
-                        <button class="btn-icon btn-icon-primary" onclick="viewPackageDetails('${pkg.name}')" title="View Details">
-                            📋
-                        </button>
-                        <button class="btn-icon btn-icon-secondary" onclick="useAsTemplate('${pkg.name}')" title="Use as Template">
-                            📑
-                        </button>
-                        <button class="btn-icon btn-icon-danger" onclick="deletePackage('${pkg.name}')" title="Delete Package">
-                            🗑️
-                        </button>
-                    </div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
         }
     } catch (error) {
         packagesList.innerHTML = `<p class="text-center error">Failed to load packages: ${error.message}</p>`;
     }
+}
+
+// Get validation badge HTML
+function getValidationBadge(validation) {
+    if (!validation || validation.status === 'unknown') {
+        return '';
+    }
+
+    let icon, className, title;
+
+    switch (validation.status) {
+        case 'valid':
+            icon = '✅';
+            className = 'validation-badge-valid';
+            title = validation.messages.join(', ') || 'Package is valid';
+            break;
+        case 'warning':
+            icon = '⚠️';
+            className = 'validation-badge-warning';
+            title = validation.warnings.join(', ') || 'Package has warnings';
+            break;
+        case 'error':
+            icon = '❌';
+            className = 'validation-badge-error';
+            title = validation.errors.join(', ') || 'Package has errors';
+            break;
+        default:
+            return '';
+    }
+
+    return `<span class="validation-badge ${className}" title="${escapeHtml(title)}">${icon}</span>`;
 }
 
 // Close packages modal

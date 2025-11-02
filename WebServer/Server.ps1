@@ -952,6 +952,108 @@ Start-PodeServer {
         }
     }
 
+    # API: Validate package
+    Add-PodeRoute -Method Get -Path '/api/packages/:name/validate' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+
+        # Get current OutputPath dynamically from config
+        $currentOutputPath = Get-OutputPath -ConfigPath $using:ConfigPath -RootPath $using:RootPath
+        $packagePath = Join-Path $currentOutputPath $packageName
+
+        if (-not (Test-Path $packagePath)) {
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                valid = $false
+                status = "error"
+                message = "Package not found"
+            } -StatusCode 404
+            return
+        }
+
+        # Read deployment script to get installer filename
+        $deployScriptPath = Join-Path $packagePath "Invoke-AppDeployToolkit.ps1"
+        $filesPath = Join-Path $packagePath "Files"
+
+        $validation = @{
+            success = $true
+            valid = $true
+            status = "valid"
+            messages = @()
+            warnings = @()
+            errors = @()
+            filesFound = @()
+        }
+
+        # Check if deployment script exists
+        if (-not (Test-Path $deployScriptPath)) {
+            $validation.valid = $false
+            $validation.status = "error"
+            $validation.errors += "Deployment script not found"
+        }
+
+        # Check if Files folder exists
+        if (-not (Test-Path $filesPath)) {
+            $validation.valid = $false
+            $validation.status = "error"
+            $validation.errors += "Files folder not found"
+        } else {
+            # Get list of files in Files folder
+            $filesInFolder = Get-ChildItem -Path $filesPath -File -Recurse | Select-Object -ExpandProperty Name
+            $validation.filesFound = $filesInFolder
+
+            # Extract expected installer filename from script
+            if (Test-Path $deployScriptPath) {
+                $deployContent = Get-Content -Path $deployScriptPath -Raw
+
+                $expectedFilename = $null
+                if ($deployContent -match 'Join-Path -Path \$adtSession\.DirFiles -ChildPath "([^"]+\.(msi|exe))"') {
+                    $expectedFilename = $Matches[1]
+                }
+
+                if ($expectedFilename) {
+                    $installerPath = Join-Path $filesPath $expectedFilename
+
+                    if (-not (Test-Path $installerPath)) {
+                        $validation.valid = $false
+                        $validation.status = "warning"
+                        $validation.warnings += "Expected installer not found: $expectedFilename"
+
+                        # Suggest similar files
+                        $similarFiles = $filesInFolder | Where-Object {
+                            $_ -like "*.$($expectedFilename.Split('.')[-1])"
+                        }
+
+                        if ($similarFiles) {
+                            $validation.warnings += "Found similar files: $($similarFiles -join ', ')"
+                        }
+                    } else {
+                        $validation.messages += "Installer found: $expectedFilename"
+                    }
+                } else {
+                    $validation.warnings += "Could not determine expected installer filename"
+                }
+            }
+
+            # Check if Files folder is empty
+            if ($filesInFolder.Count -eq 0) {
+                $validation.valid = $false
+                $validation.status = "warning"
+                $validation.warnings += "Files folder is empty - no installer files found"
+            }
+        }
+
+        # Set final status
+        if ($validation.errors.Count -gt 0) {
+            $validation.status = "error"
+        } elseif ($validation.warnings.Count -gt 0) {
+            $validation.status = "warning"
+        } else {
+            $validation.status = "valid"
+        }
+
+        Write-PodeJsonResponse -Value $validation
+    }
+
     # API: Get templates
     Add-PodeRoute -Method Get -Path '/api/templates' -ScriptBlock {
         $templates = @()
