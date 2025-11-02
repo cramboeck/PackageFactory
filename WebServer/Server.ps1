@@ -814,10 +814,14 @@ Start-PodeServer {
         $detectionKey = ""
         if ($detectScriptPath) {
             $detectContent = Get-Content -Path $detectScriptPath.FullName -Raw
-            if ($detectContent -match '\$detectionKey\s*=\s*"([^"]+)"') {
-                $detectionKey = $Matches[1]
-            }
             $detectionRule = $detectContent
+        }
+
+        # Build detection key from extracted values
+        if ($appVendor -and $appName -and $appVersion) {
+            $appIdentifier = "$appVendor-$appName-$appVersion-$appLang-$appRevision-$appArch"
+            $appIdentifier = $appIdentifier -replace '\s+', ''  # Remove spaces
+            $detectionKey = "HKLM:\SOFTWARE\${companyPrefix}_IntuneAppInstall\Apps\$appIdentifier"
         }
 
         # Build install/uninstall commands
