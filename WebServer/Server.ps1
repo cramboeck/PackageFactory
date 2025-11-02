@@ -575,9 +575,22 @@ Start-PodeServer {
     # Serve static files - cross-platform paths
     $webServerPath = Join-Path $RootPath "WebServer"
     $publicPath = Join-Path $webServerPath "Public"
-    Add-PodeStaticRoute -Path '/css' -Source (Join-Path $publicPath "css")
-    Add-PodeStaticRoute -Path '/js' -Source (Join-Path $publicPath "js")
-    Add-PodeStaticRoute -Path '/img' -Source (Join-Path $publicPath "img")
+
+    # Only add static routes for directories that actually exist
+    $cssPath = Join-Path $publicPath "css"
+    if (Test-Path $cssPath) {
+        Add-PodeStaticRoute -Path '/css' -Source $cssPath
+    }
+
+    $jsPath = Join-Path $publicPath "js"
+    if (Test-Path $jsPath) {
+        Add-PodeStaticRoute -Path '/js' -Source $jsPath
+    }
+
+    $imgPath = Join-Path $publicPath "img"
+    if (Test-Path $imgPath) {
+        Add-PodeStaticRoute -Path '/img' -Source $imgPath
+    }
 
     # Root page
     Add-PodeRoute -Method Get -Path '/' -ScriptBlock {
