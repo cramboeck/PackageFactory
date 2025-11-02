@@ -505,19 +505,30 @@ async function useAsTemplate(packageName) {
         // Close packages modal
         closePackages();
 
-        // Pre-fill the main form with package data
-        document.getElementById('app-vendor').value = pkg.vendor || '';
-        document.getElementById('app-name').value = pkg.appName || '';
-        document.getElementById('app-version').value = pkg.version || '';
-        document.getElementById('app-arch').value = pkg.architecture || 'x64';
-        document.getElementById('app-lang').value = pkg.language || 'EN';
-        document.getElementById('app-revision').value = pkg.revision || '01';
+        // Pre-fill the main form with package data (using correct camelCase IDs)
+        const vendorField = document.getElementById('appVendor');
+        const nameField = document.getElementById('appName');
+        const versionField = document.getElementById('appVersion');
+        const archField = document.getElementById('appArch');
+        const langField = document.getElementById('appLang');
+        const installerTypeField = document.getElementById('installerType');
 
-        // Set installer type
-        const installerType = pkg.installerType.toLowerCase();
-        if (installerType === 'msi' || installerType === 'exe') {
-            document.getElementById('installer-type').value = installerType;
-            toggleInstallerOptions();
+        if (vendorField) vendorField.value = pkg.vendor || '';
+        if (nameField) nameField.value = pkg.appName || '';
+        if (versionField) versionField.value = pkg.version || '';
+        if (archField) archField.value = pkg.architecture || 'x64';
+        if (langField) langField.value = pkg.language || 'EN';
+
+        // Set installer type and trigger update
+        if (installerTypeField && pkg.installerType) {
+            const installerType = pkg.installerType.toLowerCase();
+            if (installerType === 'msi' || installerType === 'exe') {
+                installerTypeField.value = installerType;
+                // Call the global updateInstallerFields function if it exists
+                if (typeof updateInstallerFields === 'function') {
+                    updateInstallerFields();
+                }
+            }
         }
 
         // Scroll to top of form
@@ -526,6 +537,7 @@ async function useAsTemplate(packageName) {
         // Show success notification
         alert(`Template loaded from: ${pkg.name}\n\nPlease update the version number and adjust other fields as needed before creating the new package.`);
     } catch (error) {
+        console.error('Template loading error:', error);
         alert('Failed to load template: ' + error.message);
     }
 }
