@@ -1,7 +1,5 @@
 # PackageFactory
 
-[![CI](https://github.com/cramboeck/PackageFactory/workflows/CI/badge.svg)](https://github.com/cramboeck/PackageFactory/actions)
-[![PowerShell Gallery](https://img.shields.io/powershellgallery/v/PackageFactory.svg)](https://www.powershellgallery.com/packages/PackageFactory)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%20%7C%207.x-blue.svg)](https://github.com/PowerShell/PowerShell)
 
