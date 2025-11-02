@@ -79,6 +79,43 @@ Browser opens automatically at `http://localhost:8080`
 
 ---
 
+## Development & Testing
+
+### Quick Test (aktueller Code)
+```powershell
+# Repository klonen
+git clone https://github.com/cramboeck/PackageFactory.git
+cd PackageFactory
+
+# Modul importieren und testen
+Import-Module .\src\PackageFactory.psd1 -Force
+.\Start-PackageFactory.bat
+```
+
+### Portable ZIP erstellen
+```powershell
+# Aus aktuellem Code ein ZIP erstellen
+.\Build-Release.ps1
+
+# ZIP wird erstellt in: .\releases\PackageFactory_vX.X.X_Portable.zip
+```
+
+### Neueste Version vom Repository holen
+
+**Mit GitHub Desktop:**
+1. `Fetch origin` klicken
+2. `Pull origin` klicken
+3. Fertig!
+
+**Mit Git CLI:**
+```bash
+git pull origin main
+```
+
+**Detaillierte Anleitung:** Siehe [DEVELOPMENT.md](DEVELOPMENT.md)
+
+---
+
 ## Project Structure
 
 ```
