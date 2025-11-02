@@ -1,0 +1,74 @@
+# PackageFactory .gitignore
+
+# Output directory (generated packages)
+Output/*
+!Output/.gitkeep
+
+# Logs
+Logs/
+*.log
+
+# PowerShell module cache
+Modules/Pode/
+Modules/*/
+
+# Temporary files
+*.tmp
+*.temp
+~$*
+
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.directory
+
+# IDE / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# User-specific config overrides
+Config/settings.local.json
+
+# Build artifacts
+*.zip
+!releases/*.zip
+
+# Docker volumes
+docker-volumes/
+
+# Test results
+TestResults/
+*.trx
+
+# PowerShell
+*.ps1~
+*.psm1~
+
+# Sensitive data
+*.key
+*.pem
+*.pfx
+credentials.json
+secrets.json
+
+# Node modules (if web frontend uses npm)
+node_modules/
+
+# Packages
+*.nupkg
+*.nuspec
+
+# IntuneWin packages
+*.intunewin

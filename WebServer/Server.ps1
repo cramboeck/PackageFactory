@@ -1,0 +1,751 @@
+<#
+.SYNOPSIS
+    Package Factory v2.0 - Pode Web Server
+.DESCRIPTION
+    Web server with API endpoints for package generation
+.NOTES
+    Author: Christoph Ramboeck (c@ramboeck.it)
+    Version: 2.0.0
+#>
+
+param(
+    [int]$Port = 8080,
+    [string]$RootPath = (Split-Path -Parent $PSScriptRoot)
+)
+
+# Import Pode
+Import-Module Pode
+
+# Global variables
+$script:RootPath = $RootPath
+$script:GeneratorPath = Join-Path $RootPath "Generator"
+$script:ConfigPath = Join-Path (Join-Path $RootPath "Config") "settings.json"
+$script:TemplatePath = Join-Path $GeneratorPath "Templates"
+$script:OutputPath = $null  # Will be set after loading config
+
+# Logging setup
+$script:LogPath = Join-Path (Join-Path $RootPath "Logs") "PackageFactory.log"
+$script:LogBuffer = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
+$script:MaxLogBufferSize = 1000  # Keep last 1000 log entries in memory
+
+# Ensure Logs directory exists
+$logsDir = Join-Path $RootPath "Logs"
+if (-not (Test-Path $logsDir)) {
+    New-Item -Path $logsDir -ItemType Directory -Force | Out-Null
+}
+
+# Ensure Config directory exists
+$configDir = Join-Path $RootPath "Config"
+if (-not (Test-Path $configDir)) {
+    New-Item -Path $configDir -ItemType Directory -Force | Out-Null
+}
+
+<#
+.SYNOPSIS
+    Write log entry in CMTrace format
+.DESCRIPTION
+    Writes log entries compatible with CMTrace.exe (Configuration Manager Trace Log Tool)
+.PARAMETER Message
+    The log message
+.PARAMETER Level
+    Log level: Info (1), Warning (2), Error (3)
+.PARAMETER Component
+    Component name (e.g., "PackageFactory", "CreatePackage")
+.PARAMETER LogPath
+    Path to log file (optional, uses script default)
+#>
+function Write-CMLog {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Message,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateSet("Info", "Warning", "Error", "Debug")]
+        [string]$Level = "Info",
+
+        [Parameter(Mandatory=$false)]
+        [string]$Component = "PackageFactory",
+
+        [Parameter(Mandatory=$false)]
+        [string]$LogPath
+    )
+
+    # Get LogPath with fallback
+    if (-not $LogPath) {
+        $LogPath = $script:LogPath
+    }
+
+    # Safety check - if LogPath is still null, skip file logging but continue console
+    if (-not $LogPath) {
+        Write-Host "[$Level] $Component - $Message" -ForegroundColor Yellow
+        return
+    }
+
+    # Map level to CMTrace type
+    $cmType = switch ($Level) {
+        "Info"    { 1 }
+        "Warning" { 2 }
+        "Error"   { 3 }
+        "Debug"   { 1 }
+        default   { 1 }
+    }
+
+    # Get caller info
+    try {
+        $callStack = Get-PSCallStack
+        $caller = if ($callStack.Count -ge 2) {
+            $callStack[1]
+        } else {
+            $callStack[0]
+        }
+
+        $file = if ($caller.ScriptName) { Split-Path -Leaf $caller.ScriptName } else { "Unknown" }
+        $line = if ($caller.ScriptLineNumber) { $caller.ScriptLineNumber } else { 0 }
+    }
+    catch {
+        $file = "Unknown"
+        $line = 0
+    }
+
+    # Format timestamp for CMTrace
+    $time = Get-Date -Format "HH:mm:ss.fff+000"
+    $date = Get-Date -Format "MM-dd-yyyy"
+
+    # Get thread ID
+    $thread = [Threading.Thread]::CurrentThread.ManagedThreadId
+
+    # Build CMTrace formatted log line
+    # Format: <![LOG[Message]LOG]!><time="HH:MM:SS.fff+000" date="MM-DD-YYYY" component="Component" context="" type="1" thread="1234" file="File:Line">
+    $cmLogLine = "<![LOG[$Message]LOG]!><time=`"$time`" date=`"$date`" component=`"$Component`" context=`"`" type=`"$cmType`" thread=`"$thread`" file=`"$file`:$line`">"
+
+    # Write to log file
+    try {
+        $cmLogLine | Out-File -FilePath $LogPath -Append -Encoding UTF8 -ErrorAction Stop
+    }
+    catch {
+        Write-Host "Failed to write to log file: $($_.Exception.Message)" -ForegroundColor Red
+    }
+
+    # Add to in-memory buffer
+    try {
+        $logEntry = @{
+            Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            Level = $Level
+            Component = $Component
+            Message = $Message
+            File = "$file`:$line"
+            CMTrace = $cmLogLine
+        }
+
+        $null = $script:LogBuffer.Add($logEntry)
+
+        # Trim buffer if too large
+        while ($script:LogBuffer.Count -gt $script:MaxLogBufferSize) {
+            $script:LogBuffer.RemoveAt(0)
+        }
+    }
+    catch {
+        # Silently fail on buffer operations
+    }
+
+    # Console output with colors
+    $color = switch ($Level) {
+        "Info"    { "White" }
+        "Warning" { "Yellow" }
+        "Error"   { "Red" }
+        "Debug"   { "Gray" }
+        default   { "White" }
+    }
+
+    Write-Host "[$Level] $Component - $Message" -ForegroundColor $color
+}
+
+# Initialize logging
+Write-CMLog -Message "PackageFactory v2.0 starting..." -Level Info -Component "Startup"
+
+# Load or create config
+function Get-Config {
+    param([string]$ConfigPath)
+
+    if (-not $ConfigPath) {
+        $ConfigPath = $script:ConfigPath
+    }
+
+    try {
+        if (Test-Path $ConfigPath) {
+            $content = Get-Content $ConfigPath -Raw -ErrorAction Stop
+            return $content | ConvertFrom-Json -ErrorAction Stop
+        } else {
+            # Create default config
+            $defaultConfig = @{
+                CompanyPrefix = "MSP"
+                DefaultArch = "x64"
+                DefaultLang = "EN"
+                IncludePSADT = $true
+                AutoOpenBrowser = $true
+                OutputPath = "./Output"
+            }
+
+            # Ensure directory exists
+            $configDir = Split-Path -Parent $ConfigPath
+            if (-not (Test-Path $configDir)) {
+                New-Item -Path $configDir -ItemType Directory -Force | Out-Null
+            }
+
+            $defaultConfig | ConvertTo-Json -Depth 10 | Set-Content $ConfigPath -Encoding UTF8 -ErrorAction Stop
+            return $defaultConfig
+        }
+    }
+    catch {
+        # Return default on error
+        Write-Host "Warning: Failed to load config, using defaults: $($_.Exception.Message)" -ForegroundColor Yellow
+        return @{
+            CompanyPrefix = "MSP"
+            DefaultArch = "x64"
+            DefaultLang = "EN"
+            IncludePSADT = $true
+            AutoOpenBrowser = $true
+            OutputPath = "./Output"
+        }
+    }
+}
+
+# Save config
+function Set-Config {
+    param(
+        $Config,
+        [string]$ConfigPath
+    )
+
+    if (-not $ConfigPath) {
+        $ConfigPath = $script:ConfigPath
+    }
+
+    try {
+        # Ensure directory exists
+        $configDir = Split-Path -Parent $ConfigPath
+        if (-not (Test-Path $configDir)) {
+            New-Item -Path $configDir -ItemType Directory -Force | Out-Null
+        }
+
+        $Config | ConvertTo-Json -Depth 10 | Set-Content $ConfigPath -Encoding UTF8 -ErrorAction Stop
+    }
+    catch {
+        Write-Host "Warning: Failed to save config: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# Get current OutputPath from config (dynamically resolved)
+function Get-OutputPath {
+    param(
+        [string]$ConfigPath,
+        [string]$RootPath
+    )
+
+    if (-not $ConfigPath) {
+        $ConfigPath = $script:ConfigPath
+    }
+    if (-not $RootPath) {
+        $RootPath = $script:RootPath
+    }
+
+    $config = Get-Config -ConfigPath $ConfigPath
+    $outputPathFromConfig = if ($config.OutputPath) { $config.OutputPath } else { "./Output" }
+
+    # Handle relative vs absolute paths
+    if ([System.IO.Path]::IsPathRooted($outputPathFromConfig)) {
+        return $outputPathFromConfig
+    } else {
+        return Join-Path $RootPath $outputPathFromConfig
+    }
+}
+
+# Generator function (from v1.3.0)
+function New-Package {
+    param(
+        [string]$AppName,
+        [string]$AppVendor,
+        [string]$AppVersion,
+        [string]$AppArch = 'x64',
+        [string]$AppLang = 'EN',
+        [string]$CompanyPrefix = 'MSP',
+        [string]$InstallerType = 'msi',
+        [string]$MsiFilename = "",
+        [string]$MsiSilentParams = "/qn /norestart",
+        [string]$ExeFilename = "",
+        [string]$ExeSilentParams = "",
+        [string]$ProcessesToClose = "",
+        [bool]$IncludePSADT = $false,
+        [string]$ConfigPath,
+        [string]$RootPath,
+        [string]$TemplatePath,
+        [string]$LogPath
+    )
+
+    # Use script variables as fallback
+    if (-not $ConfigPath) { $ConfigPath = $script:ConfigPath }
+    if (-not $RootPath) { $RootPath = $script:RootPath }
+    if (-not $TemplatePath) { $TemplatePath = $script:TemplatePath }
+    if (-not $LogPath) { $LogPath = $script:LogPath }
+
+    try {
+        Write-CMLog -Message "Starting package creation: $AppVendor $AppName $AppVersion ($AppArch)" -Level Info -Component "CreatePackage" -LogPath $LogPath
+
+        $templatePath = Join-Path $TemplatePath "Autopilot-PSADT-4x"
+
+        if (-not (Test-Path $templatePath)) {
+            Write-CMLog -Message "Template not found: $templatePath" -Level Error -Component "CreatePackage" -LogPath $LogPath
+            throw "Template not found: $templatePath"
+        }
+
+        # Generate package name with Company Prefix
+        $packageName = if ($CompanyPrefix) {
+            "$CompanyPrefix`_$AppVendor`_$($AppName.Replace(' ', ''))`_$AppVersion`_$AppArch"
+        } else {
+            "$AppVendor`_$($AppName.Replace(' ', ''))`_$AppVersion`_$AppArch"
+        }
+        Write-CMLog -Message "Package name: $packageName" -Level Info -Component "CreatePackage" -LogPath $LogPath
+
+        $currentOutputPath = Get-OutputPath -ConfigPath $ConfigPath -RootPath $RootPath
+        $packagePath = Join-Path $currentOutputPath $packageName
+
+        # Ensure output directory exists
+        if (-not (Test-Path $currentOutputPath)) {
+            Write-CMLog -Message "Creating output directory: $currentOutputPath" -Level Info -Component "CreatePackage" -LogPath $LogPath
+            New-Item -Path $currentOutputPath -ItemType Directory -Force | Out-Null
+        }
+
+        # Check if package exists
+        if (Test-Path $packagePath) {
+            Write-CMLog -Message "Package already exists: $packageName" -Level Error -Component "CreatePackage" -LogPath $LogPath
+            throw "Package already exists: $packageName"
+        }
+
+        # Create package structure
+        Write-CMLog -Message "Creating package directory: $packagePath" -Level Info -Component "CreatePackage" -LogPath $LogPath
+        New-Item -Path $packagePath -ItemType Directory -Force | Out-Null
+        $filesPath = Join-Path $packagePath "Files"
+        New-Item -Path $filesPath -ItemType Directory -Force | Out-Null
+        $configPath = Join-Path $filesPath "Config"
+        New-Item -Path $configPath -ItemType Directory -Force | Out-Null
+
+        # Prepare values
+        $date = Get-Date -Format "yyyy-MM-dd"
+        $appRevision = "01"
+
+        $processesFormatted = if ($ProcessesToClose) {
+            ($ProcessesToClose.Split(',') | ForEach-Object { "'$($_.Trim())'" }) -join ', '
+        } else {
+            ""
+        }
+
+        # Determine installer file and parameters based on type
+        if ($InstallerType -eq 'msi') {
+            $installerFile = if ($MsiFilename) { $MsiFilename } else { "setup.msi" }
+            $silentParams = $MsiSilentParams
+            $installCmd = "        Install-ADTApplication -FilePath `"`$dirFiles\$installerFile`" -ArgumentList `"$silentParams`""
+            $uninstallCmd = "        Uninstall-ADTApplication -FilePath `"`$dirFiles\$installerFile`" -ArgumentList `"/qn /norestart`""
+        } else {
+            $installerFile = if ($ExeFilename) { $ExeFilename } else { "setup.exe" }
+            $silentParams = $ExeSilentParams
+            $installCmd = "        Install-ADTApplication -FilePath `"`$dirFiles\$installerFile`" -ArgumentList `"$silentParams`""
+            $uninstallCmd = "        # EXE uninstall - customize as needed`n        Uninstall-ADTApplication -FilePath `"`$dirFiles\uninstall.exe`" -ArgumentList `"$silentParams`""
+        }
+
+        $replacements = @{
+            '{{APP_NAME}}' = $AppName
+            '{{APP_VENDOR}}' = $AppVendor
+            '{{APP_VERSION}}' = $AppVersion
+            '{{APP_ARCH}}' = $AppArch
+            '{{APP_LANG}}' = $AppLang
+            '{{APP_REVISION}}' = $appRevision
+            '{{COMPANY_PREFIX}}' = $CompanyPrefix
+            '{{DATE}}' = $date
+            '{{INSTALLER_TYPE}}' = $InstallerType.ToUpper()
+            '{{INSTALLER_FILE}}' = $installerFile
+            '{{SILENT_PARAMS}}' = $silentParams
+            '{{MSI_FILENAME}}' = $MsiFilename
+            '{{EXE_FILENAME}}' = $ExeFilename
+            '{{PROCESSES_TO_CLOSE}}' = $processesFormatted
+            '{{INSTALL_COMMAND}}' = $installCmd
+            '{{UNINSTALL_COMMAND}}' = $uninstallCmd
+        }
+
+        # Replace placeholders function
+        function Replace-Placeholders {
+            param([string]$Content, [hashtable]$Replacements)
+            foreach ($key in $Replacements.Keys) {
+                $Content = $Content -replace [regex]::Escape($key), $Replacements[$key]
+            }
+            return $Content
+        }
+
+        # Process templates - use Join-Path for cross-platform compatibility
+        $invokeTemplate = Join-Path $templatePath "Invoke-AppDeployToolkit.ps1.template"
+        $templateContent = Get-Content $invokeTemplate -Raw
+        $processedContent = Replace-Placeholders -Content $templateContent -Replacements $replacements
+        $invokeOutput = Join-Path $packagePath "Invoke-AppDeployToolkit.ps1"
+        $processedContent | Set-Content $invokeOutput -Encoding UTF8
+
+        $detectTemplatePath = Join-Path $templatePath "Detect-Application.ps1.template"
+        $detectTemplate = Get-Content $detectTemplatePath -Raw
+        $detectProcessed = Replace-Placeholders -Content $detectTemplate -Replacements $replacements
+        $detectOutput = Join-Path $packagePath "Detect-$($AppName.Replace(' ', '')).ps1"
+        $detectProcessed | Set-Content $detectOutput -Encoding UTF8
+
+        # Create README
+        $readmeContent = @"
+# $AppName - Autopilot Deployment Package
+
+**Vendor:** $AppVendor
+**Version:** $AppVersion
+**Architecture:** $AppArch
+**Language:** $AppLang
+**Created:** $date
+**Author:** Christoph Ramböck (c@ramboeck.it)
+
+---
+
+## Quick Setup
+
+### 1. Add PSAppDeployToolkit 4.1.5
+``````
+Download: https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases
+Extract to: PSAppDeployToolkit\
+``````
+
+### 2. Add Installer
+``````
+$(if ($MsiFilename) { "Copy MSI to: Files\$MsiFilename" } else { "Copy EXE to: Files\$ExeFilename" })
+``````
+
+### 3. Test
+``````powershell
+.\Invoke-AppDeployToolkit.ps1 -DeployMode Silent
+.\Detect-$($AppName.Replace(' ', '')).ps1
+``````
+
+### 4. Create IntuneWin
+``````powershell
+IntuneWinAppUtil.exe -c "." -s "Invoke-AppDeployToolkit.ps1" -o "Output"
+``````
+
+---
+
+## Intune Configuration
+
+**Install Command:**
+``````
+powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -DeploymentType "Install" -DeployMode "Silent"
+``````
+
+**Uninstall Command:**
+``````
+powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -DeploymentType "Uninstall" -DeployMode "Silent"
+``````
+
+**Detection Method:**
+- Type: Custom Script
+- Script: Detect-$($AppName.Replace(' ', '')).ps1
+- Run as: System
+
+---
+
+**© 2025 Ramböck IT - Generated by Package Factory v2.0**
+"@
+        $readmeOutput = Join-Path $packagePath "README.md"
+        $readmeContent | Set-Content $readmeOutput -Encoding UTF8
+
+        # Create Files README
+        $filesReadme = @"
+# Installation Files
+
+## Required Files
+
+### $(if ($MsiFilename) { $MsiFilename } else { $ExeFilename })
+**Action:** Download installer and place here
+
+### Config/ (Optional)
+**Action:** Add configuration files if needed
+
+---
+
+**© 2025 Ramböck IT**
+"@
+        $filesReadmePath = Join-Path (Join-Path $packagePath "Files") "README.md"
+        $filesReadme | Set-Content $filesReadmePath -Encoding UTF8
+
+        # Download PSADT if requested
+        if ($IncludePSADT) {
+            Write-CMLog -Message "Downloading PSADT 4.1.5..." -Level Info -Component "CreatePackage" -LogPath $LogPath
+            $psadtUrl = "https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/download/4.1.5/PSAppDeployToolkit_v4.1.5.zip"
+            $psadtZipPath = Join-Path $env:TEMP "PSAppDeployToolkit_v4.1.5.zip"
+            $psadtExtractPath = Join-Path $env:TEMP "PSAppDeployToolkit_Extract"
+
+            try {
+                $ProgressPreference = 'SilentlyContinue'
+                Invoke-WebRequest -Uri $psadtUrl -OutFile $psadtZipPath -UseBasicParsing
+                Write-CMLog -Message "PSADT downloaded successfully" -Level Info -Component "CreatePackage" -LogPath $LogPath
+
+                if (Test-Path $psadtExtractPath) {
+                    Remove-Item $psadtExtractPath -Recurse -Force
+                }
+                Expand-Archive -Path $psadtZipPath -DestinationPath $psadtExtractPath -Force
+                Write-CMLog -Message "PSADT extracted successfully" -Level Info -Component "CreatePackage" -LogPath $LogPath
+
+                $psadtSourceFolder = Get-ChildItem -Path $psadtExtractPath -Directory -Recurse |
+                    Where-Object { $_.Name -eq "PSAppDeployToolkit" } |
+                    Select-Object -First 1
+
+                if ($psadtSourceFolder) {
+                    $psadtDestination = Join-Path $packagePath "PSAppDeployToolkit"
+                    Copy-Item -Path $psadtSourceFolder.FullName -Destination $psadtDestination -Recurse -Force
+                    Write-CMLog -Message "PSADT copied to package" -Level Info -Component "CreatePackage" -LogPath $LogPath
+                } else {
+                    Write-CMLog -Message "PSADT folder not found in archive" -Level Warning -Component "CreatePackage" -LogPath $LogPath
+                }
+
+                Remove-Item $psadtZipPath -Force -ErrorAction SilentlyContinue
+                Remove-Item $psadtExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            catch {
+                Write-CMLog -Message "PSADT download/extract failed: $($_.Exception.Message)" -Level Warning -Component "CreatePackage" -LogPath $LogPath
+                # PSADT download failed, but package was created
+            }
+        }
+
+        Write-CMLog -Message "Package created successfully: $packageName at $packagePath" -Level Info -Component "CreatePackage" -LogPath $LogPath
+        return @{
+            Success = $true
+            PackageName = $packageName
+            PackagePath = $packagePath
+            Message = "Package created successfully"
+        }
+    }
+    catch {
+        Write-CMLog -Message "Package creation failed: $($_.Exception.Message)" -Level Error -Component "CreatePackage" -LogPath $LogPath
+        return @{
+            Success = $false
+            Error = $_.Exception.Message
+        }
+    }
+}
+
+# Load config and initialize OutputPath
+$initialConfig = Get-Config
+$outputPathFromConfig = if ($initialConfig.OutputPath) { $initialConfig.OutputPath } else { "./Output" }
+
+# Handle relative vs absolute paths
+if ([System.IO.Path]::IsPathRooted($outputPathFromConfig)) {
+    $script:OutputPath = $outputPathFromConfig
+} else {
+    $script:OutputPath = Join-Path $RootPath $outputPathFromConfig
+}
+
+# Ensure Output directory exists
+if (-not (Test-Path $script:OutputPath)) {
+    New-Item -Path $script:OutputPath -ItemType Directory -Force | Out-Null
+    Write-Host "Created output directory: $script:OutputPath" -ForegroundColor Cyan
+}
+
+Write-Host "Output path: $script:OutputPath" -ForegroundColor Cyan
+
+# Start Pode Server
+Start-PodeServer {
+    # Listen on all interfaces (0.0.0.0) for Docker compatibility
+    # Use * which translates to 0.0.0.0 in Pode
+    Add-PodeEndpoint -Address * -Port $Port -Protocol Http
+
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host "  Server running on: http://0.0.0.0:$Port" -ForegroundColor Green
+    Write-Host "  Access via: http://localhost:$Port" -ForegroundColor Green
+    Write-Host "  Press Ctrl+C to stop" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host ""
+
+    # Open browser automatically
+    Start-Sleep -Seconds 1
+    try {
+        Start-Process "http://localhost:$Port"
+    } catch {
+        # Browser opening failed, user can open manually
+    }
+
+    # Serve static files - cross-platform paths
+    $webServerPath = Join-Path $RootPath "WebServer"
+    $publicPath = Join-Path $webServerPath "Public"
+    Add-PodeStaticRoute -Path '/css' -Source (Join-Path $publicPath "css")
+    Add-PodeStaticRoute -Path '/js' -Source (Join-Path $publicPath "js")
+    Add-PodeStaticRoute -Path '/img' -Source (Join-Path $publicPath "img")
+
+    # Root page
+    Add-PodeRoute -Method Get -Path '/' -ScriptBlock {
+        $webServerPath = Join-Path $using:RootPath "WebServer"
+        $publicPath = Join-Path $webServerPath "Public"
+        $htmlPath = Join-Path $publicPath "index.html"
+        Write-PodeHtmlResponse -Value (Get-Content $htmlPath -Raw)
+    }
+
+    # API: Get config
+    Add-PodeRoute -Method Get -Path '/api/config' -ScriptBlock {
+        $config = Get-Config -ConfigPath $using:ConfigPath
+        Write-PodeJsonResponse -Value $config
+    }
+
+    # API: Save config
+    Add-PodeRoute -Method Post -Path '/api/config' -ScriptBlock {
+        $config = $WebEvent.Data
+        Set-Config -Config $config -ConfigPath $using:ConfigPath
+        Write-CMLog -Message "Configuration saved" -Level Info -Component "Config" -LogPath $using:LogPath
+        Write-PodeJsonResponse -Value @{ success = $true; message = "Configuration saved" }
+    }
+
+    # API: Get logs
+    Add-PodeRoute -Method Get -Path '/api/logs' -ScriptBlock {
+        $limit = $WebEvent.Query['limit']
+        $level = $WebEvent.Query['level']
+
+        # Get LogBuffer reference first, then call ToArray()
+        $logBuffer = $using:LogBuffer
+        $logs = $logBuffer.ToArray()
+
+        # Ensure logs is always an array (not null)
+        if (-not $logs) {
+            $logs = @()
+        }
+
+        # Filter by level if specified
+        if ($level -and $level -ne 'All') {
+            $logs = $logs | Where-Object { $_.Level -eq $level }
+        }
+
+        # Limit results if specified
+        if ($limit) {
+            $limitNum = [int]$limit
+            if ($logs.Count -gt $limitNum) {
+                $logs = $logs | Select-Object -Last $limitNum
+            }
+        }
+
+        # Ensure logs is still an array after filtering (Where-Object can return null)
+        if (-not $logs) {
+            $logs = @()
+        }
+
+        Write-PodeJsonResponse -Value @{
+            success = $true
+            count = if ($logs) { $logs.Count } else { 0 }
+            logs = if ($logs) { $logs } else { @() }
+        }
+    }
+
+    # API: Get log file
+    Add-PodeRoute -Method Get -Path '/api/logs/download' -ScriptBlock {
+        $logPath = $using:LogPath
+
+        if (Test-Path $logPath) {
+            $content = Get-Content $logPath -Raw
+            Set-PodeResponseAttachment -Path $logPath -ContentType 'text/plain'
+        } else {
+            Write-PodeJsonResponse -Value @{ success = $false; error = "Log file not found" } -StatusCode 404
+        }
+    }
+
+    # API: Clear logs
+    Add-PodeRoute -Method Delete -Path '/api/logs' -ScriptBlock {
+        # Clear in-memory buffer
+        $logBuffer = $using:LogBuffer
+        $logBuffer.Clear()
+
+        # Clear log file
+        if (Test-Path $using:LogPath) {
+            Clear-Content $using:LogPath
+        }
+
+        Write-CMLog -Message "Logs cleared by user" -Level Info -Component "Logs" -LogPath $using:LogPath
+        Write-PodeJsonResponse -Value @{ success = $true; message = "Logs cleared" }
+    }
+
+    # API: Create package
+    Add-PodeRoute -Method Post -Path '/api/create-package' -ScriptBlock {
+        $data = $WebEvent.Data
+
+        $result = New-Package `
+            -AppName $data.appName `
+            -AppVendor $data.appVendor `
+            -AppVersion $data.appVersion `
+            -AppArch $data.appArch `
+            -AppLang $data.appLang `
+            -CompanyPrefix $data.companyPrefix `
+            -InstallerType $data.installerType `
+            -MsiFilename $data.msiFilename `
+            -MsiSilentParams $data.msiSilentParams `
+            -ExeFilename $data.exeFilename `
+            -ExeSilentParams $data.exeSilentParams `
+            -ProcessesToClose $data.processesToClose `
+            -IncludePSADT $data.includePSADT `
+            -ConfigPath $using:ConfigPath `
+            -RootPath $using:RootPath `
+            -TemplatePath $using:TemplatePath `
+            -LogPath $using:LogPath
+
+        Write-PodeJsonResponse -Value $result
+    }
+
+    # API: List packages
+    Add-PodeRoute -Method Get -Path '/api/packages' -ScriptBlock {
+        $packages = @()
+
+        # Get current OutputPath dynamically from config
+        $currentOutputPath = Get-OutputPath -ConfigPath $using:ConfigPath -RootPath $using:RootPath
+
+        if (Test-Path $currentOutputPath) {
+            Get-ChildItem -Path $currentOutputPath -Directory | ForEach-Object {
+                $readmePath = Join-Path $_.FullName "README.md"
+                $created = $_.CreationTime.ToString("yyyy-MM-dd HH:mm")
+
+                $packages += @{
+                    name = $_.Name
+                    path = $_.FullName
+                    created = $created
+                    hasReadme = Test-Path $readmePath
+                }
+            }
+        }
+
+        Write-PodeJsonResponse -Value $packages
+    }
+
+    # API: Delete package
+    Add-PodeRoute -Method Delete -Path '/api/packages/:name' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+
+        # Get current OutputPath dynamically from config
+        $currentOutputPath = Get-OutputPath -ConfigPath $using:ConfigPath -RootPath $using:RootPath
+        $packagePath = Join-Path $currentOutputPath $packageName
+
+        if (Test-Path $packagePath) {
+            Remove-Item -Path $packagePath -Recurse -Force
+            Write-PodeJsonResponse -Value @{ success = $true; message = "Package deleted" }
+        } else {
+            Write-PodeJsonResponse -Value @{ success = $false; error = "Package not found" } -StatusCode 404
+        }
+    }
+
+    # API: Get templates
+    Add-PodeRoute -Method Get -Path '/api/templates' -ScriptBlock {
+        $templates = @()
+
+        if (Test-Path $using:TemplatePath) {
+            Get-ChildItem -Path $using:TemplatePath -Directory | ForEach-Object {
+                $templates += @{
+                    name = $_.Name
+                    path = $_.FullName
+                }
+            }
+        }
+
+        Write-PodeJsonResponse -Value $templates
+    }
+}
