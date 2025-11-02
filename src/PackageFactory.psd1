@@ -3,7 +3,7 @@
     RootModule        = 'PackageFactory.psm1'
 
     # Version number of this module
-    ModuleVersion     = '2.1.0'
+    ModuleVersion     = '2.2.0'
 
     # ID used to uniquely identify this module
     GUID              = 'a8f3c4d2-9e1b-4a7f-8c5d-3b2e9f6a1c4d'

@@ -1,10 +1,15 @@
-PackageFactory v2.1.0
+PackageFactory v2.2.0
 Build Date: 2025-11-02
 Status: Production Ready
 
+New Features (v2.2.0):
+- ✅ View Package Details: Access deployment commands anytime
+- ✅ Template Functionality: Duplicate packages for quick creation
+- ✅ PSADT 4.1.7 Fix: Correct commandlets (Start-ADTMsiProcess, Start-ADTProcess)
+
 Validation: PASSED ✓
 - 0 Syntax Errors
-- 12 Files Validated
+- 14 Files Validated
 - All Functions Tested
 - Directory Structure Complete
 

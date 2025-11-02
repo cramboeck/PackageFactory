@@ -161,7 +161,7 @@ function New-AutopilotPackage {
         `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
         `$arguments = "$silentParams"
 
-        Install-ADTApplication -FilePath `$installerPath -ArgumentList `$arguments
+        Start-ADTMsiProcess -Action Install -FilePath `$installerPath -Parameters `$arguments
 "@
 
                 # Uninstall command
@@ -170,7 +170,7 @@ function New-AutopilotPackage {
         `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
         `$arguments = "/qn /norestart"
 
-        Uninstall-ADTApplication -FilePath `$installerPath -ArgumentList `$arguments
+        Start-ADTMsiProcess -Action Uninstall -FilePath `$installerPath -Parameters `$arguments
 "@
             }
             else {
@@ -183,7 +183,7 @@ function New-AutopilotPackage {
         `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
         `$arguments = "$silentParams"
 
-        Install-ADTApplication -FilePath `$installerPath -ArgumentList `$arguments
+        Start-ADTProcess -FilePath `$installerPath -ArgumentList `$arguments -Wait
 "@
 
                 # Uninstall command - customize per application
@@ -193,13 +193,13 @@ function New-AutopilotPackage {
         `$uninstallerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "uninstall.exe"
         if (Test-Path -Path `$uninstallerPath) {
             `$arguments = "$silentParams"
-            Uninstall-ADTApplication -FilePath `$uninstallerPath -ArgumentList `$arguments
+            Start-ADTProcess -FilePath `$uninstallerPath -ArgumentList `$arguments -Wait
         }
 
         # Option 2: Registry-based uninstall string
         # `$uninstallString = Get-ADTUninstallKey -ApplicationName "$($AppName)" | Select-Object -ExpandProperty UninstallString
         # if (`$uninstallString) {
-        #     Invoke-ADTCommandLine -Path `$uninstallString -Parameters "$silentParams"
+        #     Start-ADTProcess -FilePath `$uninstallString -ArgumentList "$silentParams" -Wait
         # }
 "@
             }

@@ -270,6 +270,12 @@ async function showPackages() {
                         <p>Path: ${pkg.path}</p>
                     </div>
                     <div class="package-actions">
+                        <button class="btn btn-primary" onclick="viewPackageDetails('${pkg.name}')">
+                            📋 Details
+                        </button>
+                        <button class="btn btn-secondary" onclick="useAsTemplate('${pkg.name}')">
+                            📑 Use as Template
+                        </button>
                         <button class="btn btn-danger" onclick="deletePackage('${pkg.name}')">
                             🗑️ Delete
                         </button>
@@ -308,6 +314,181 @@ async function deletePackage(packageName) {
         }
     } catch (error) {
         alert('Failed to delete package: ' + error.message);
+    }
+}
+
+// View package details from existing package
+async function viewPackageDetails(packageName) {
+    try {
+        const response = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(packageName)}/details`);
+        const result = await response.json();
+
+        if (!result.success) {
+            alert('Failed to load package details: ' + (result.error || 'Unknown error'));
+            return;
+        }
+
+        const pkg = result.package;
+
+        // Close packages modal first
+        closePackages();
+
+        // Show details in the package details modal
+        const modal = document.getElementById('package-details-modal');
+        const content = document.getElementById('package-details-content');
+
+        const appNameNoSpaces = pkg.appName ? pkg.appName.replace(/ /g, '') : 'App';
+        const detectionKeyPath = pkg.detectionKey || `HKLM:\\SOFTWARE\\${pkg.companyPrefix}_IntuneAppInstall\\Apps\\${pkg.name}`;
+
+        // Build details HTML (similar to creation success, but adapted for existing packages)
+        content.innerHTML = `
+            <div class="success-banner">
+                <h3>📦 Package Details</h3>
+                <p><strong>${pkg.name}</strong></p>
+                <p>View and copy deployment information</p>
+            </div>
+
+            <div class="details-grid">
+                <div class="details-card">
+                    <h3>📦 Package Information</h3>
+                    <div class="details-row">
+                        <span class="details-label">Vendor:</span>
+                        <span class="details-value">${pkg.vendor || 'N/A'}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-label">Application:</span>
+                        <span class="details-value">${pkg.appName || 'N/A'}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-label">Version:</span>
+                        <span class="details-value">${pkg.version || 'N/A'}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-label">Architecture:</span>
+                        <span class="details-value">${pkg.architecture || 'N/A'}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-label">Language:</span>
+                        <span class="details-value">${pkg.language || 'N/A'}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-label">Installer Type:</span>
+                        <span class="details-value">${pkg.installerType.toUpperCase()}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-label">Location:</span>
+                        <span class="details-value" style="font-size: 11px;">${pkg.path}</span>
+                    </div>
+                </div>
+
+                <div class="details-card">
+                    <h3>🔍 Registry Detection</h3>
+                    <div class="details-row">
+                        <span class="details-label">Registry Path:</span>
+                    </div>
+                    <div class="command-block" style="margin-top: 10px;">
+                        <button class="copy-btn" onclick="copyToClipboard(this, '${detectionKeyPath}')">📋 Copy</button>
+                        <pre>${detectionKeyPath}</pre>
+                    </div>
+                    ${pkg.detectionScript ? `
+                    <div class="details-row" style="margin-top: 10px;">
+                        <span class="details-label">Detection Script:</span>
+                        <span class="details-value">${pkg.detectionScript}</span>
+                    </div>
+                    ` : ''}
+                </div>
+            </div>
+
+            <div class="details-card">
+                <h3>⚙️ Installation Commands</h3>
+                <strong>Install Command (Interactive):</strong>
+                <div class="command-block">
+                    <button class="copy-btn" onclick="copyToClipboard(this, '.\\\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Interactive')">📋 Copy</button>
+                    <pre>.\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Interactive</pre>
+                </div>
+                <strong>Install Command (Silent):</strong>
+                <div class="command-block">
+                    <button class="copy-btn" onclick="copyToClipboard(this, '.\\\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Silent')">📋 Copy</button>
+                    <pre>.\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Silent</pre>
+                </div>
+                <strong>Uninstall Command:</strong>
+                <div class="command-block">
+                    <button class="copy-btn" onclick="copyToClipboard(this, '.\\\\Invoke-AppDeployToolkit.ps1 -DeploymentType Uninstall -DeployMode Silent')">📋 Copy</button>
+                    <pre>.\\Invoke-AppDeployToolkit.ps1 -DeploymentType Uninstall -DeployMode Silent</pre>
+                </div>
+            </div>
+
+            <div class="details-card">
+                <h3>☁️ Microsoft Intune Commands</h3>
+                <strong>Install Command:</strong>
+                <div class="command-block">
+                    <button class="copy-btn" onclick="copyToClipboard(this, '${pkg.installCommand}')">📋 Copy</button>
+                    <pre>${pkg.installCommand}</pre>
+                </div>
+                <strong>Uninstall Command:</strong>
+                <div class="command-block">
+                    <button class="copy-btn" onclick="copyToClipboard(this, '${pkg.uninstallCommand}')">📋 Copy</button>
+                    <pre>${pkg.uninstallCommand}</pre>
+                </div>
+                ${pkg.detectionScript ? `
+                <strong>Detection Script:</strong>
+                <div class="command-block">
+                    <button class="copy-btn" onclick="copyToClipboard(this, '${pkg.detectionScript}')">📋 Copy</button>
+                    <pre>${pkg.detectionScript}</pre>
+                </div>
+                ` : ''}
+            </div>
+
+            <div class="quick-actions">
+                <button class="btn btn-primary" onclick="openPackageFolder('${pkg.path}')">📂 Open Package Folder</button>
+                <button class="btn btn-secondary" onclick="closePackageDetails()">✅ Done</button>
+            </div>
+        `;
+
+        modal.style.display = 'flex';
+    } catch (error) {
+        alert('Failed to load package details: ' + error.message);
+    }
+}
+
+// Use existing package as template
+async function useAsTemplate(packageName) {
+    try {
+        const response = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(packageName)}/details`);
+        const result = await response.json();
+
+        if (!result.success) {
+            alert('Failed to load package details: ' + (result.error || 'Unknown error'));
+            return;
+        }
+
+        const pkg = result.package;
+
+        // Close packages modal
+        closePackages();
+
+        // Pre-fill the main form with package data
+        document.getElementById('app-vendor').value = pkg.vendor || '';
+        document.getElementById('app-name').value = pkg.appName || '';
+        document.getElementById('app-version').value = pkg.version || '';
+        document.getElementById('app-arch').value = pkg.architecture || 'x64';
+        document.getElementById('app-lang').value = pkg.language || 'EN';
+        document.getElementById('app-revision').value = pkg.revision || '01';
+
+        // Set installer type
+        const installerType = pkg.installerType.toLowerCase();
+        if (installerType === 'msi' || installerType === 'exe') {
+            document.getElementById('installer-type').value = installerType;
+            toggleInstallerOptions();
+        }
+
+        // Scroll to top of form
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+
+        // Show success notification
+        alert(`Template loaded from: ${pkg.name}\n\nPlease update the version number and adjust other fields as needed before creating the new package.`);
+    } catch (error) {
+        alert('Failed to load template: ' + error.message);
     }
 }
 

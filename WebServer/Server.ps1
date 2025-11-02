@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    PackageFactory v2.1 - Pode Web Server
+    PackageFactory v2.2 - Pode Web Server
 .DESCRIPTION
     Web server with API endpoints for package generation
 .NOTES
     Author: Christoph Ramboeck (c@ramboeck.it)
-    Version: 2.1.0
+    Version: 2.2.0
 #>
 
 param(
@@ -350,7 +350,7 @@ function New-Package {
         `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
         `$arguments = "$silentParams"
 
-        Install-ADTApplication -FilePath `$installerPath -ArgumentList `$arguments
+        Start-ADTMsiProcess -Action Install -FilePath `$installerPath -Parameters `$arguments
 "@
 
             # Uninstall command
@@ -359,7 +359,7 @@ function New-Package {
         `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
         `$arguments = "/qn /norestart"
 
-        Uninstall-ADTApplication -FilePath `$installerPath -ArgumentList `$arguments
+        Start-ADTMsiProcess -Action Uninstall -FilePath `$installerPath -Parameters `$arguments
 "@
         } else {
             $installerFile = if ($ExeFilename) { $ExeFilename } else { "setup.exe" }
@@ -371,7 +371,7 @@ function New-Package {
         `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
         `$arguments = "$silentParams"
 
-        Install-ADTApplication -FilePath `$installerPath -ArgumentList `$arguments
+        Start-ADTProcess -FilePath `$installerPath -ArgumentList `$arguments -Wait
 "@
 
             # Uninstall command - customize per application
@@ -381,13 +381,13 @@ function New-Package {
         `$uninstallerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "uninstall.exe"
         if (Test-Path -Path `$uninstallerPath) {
             `$arguments = "$silentParams"
-            Uninstall-ADTApplication -FilePath `$uninstallerPath -ArgumentList `$arguments
+            Start-ADTProcess -FilePath `$uninstallerPath -ArgumentList `$arguments -Wait
         }
 
         # Option 2: Registry-based uninstall string
         # `$uninstallString = Get-ADTUninstallKey -ApplicationName "$AppName" | Select-Object -ExpandProperty UninstallString
         # if (`$uninstallString) {
-        #     Invoke-ADTCommandLine -Path `$uninstallString -Parameters "$silentParams"
+        #     Start-ADTProcess -FilePath `$uninstallString -ArgumentList "$silentParams" -Wait
         # }
 "@
         }
@@ -768,6 +768,92 @@ Start-PodeServer {
         }
 
         Write-PodeJsonResponse -Value $packages
+    }
+
+    # API: Get package details
+    Add-PodeRoute -Method Get -Path '/api/packages/:name/details' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+
+        # Get current OutputPath dynamically from config
+        $currentOutputPath = Get-OutputPath -ConfigPath $using:ConfigPath -RootPath $using:RootPath
+        $packagePath = Join-Path $currentOutputPath $packageName
+
+        if (-not (Test-Path $packagePath)) {
+            Write-PodeJsonResponse -Value @{ success = $false; error = "Package not found" } -StatusCode 404
+            return
+        }
+
+        # Read Invoke-AppDeployToolkit.ps1 to extract metadata
+        $deployScriptPath = Join-Path $packagePath "Invoke-AppDeployToolkit.ps1"
+        $detectScriptPath = Get-ChildItem -Path $packagePath -Filter "Detect-*.ps1" | Select-Object -First 1
+
+        if (-not (Test-Path $deployScriptPath)) {
+            Write-PodeJsonResponse -Value @{ success = $false; error = "Deployment script not found" } -StatusCode 404
+            return
+        }
+
+        # Parse deployment script for metadata
+        $deployContent = Get-Content -Path $deployScriptPath -Raw
+
+        # Extract variables using regex
+        $appVendor = if ($deployContent -match "AppVendor\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+        $appName = if ($deployContent -match "AppName\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+        $appVersion = if ($deployContent -match "AppVersion\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+        $appArch = if ($deployContent -match "AppArch\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+        $appLang = if ($deployContent -match "AppLang\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+        $appRevision = if ($deployContent -match "AppRevision\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+        $companyPrefix = if ($deployContent -match "CompanyPrefix\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+
+        # Extract installer type and parameters
+        $installerType = "unknown"
+        if ($deployContent -match "Start-ADTMsiProcess") { $installerType = "msi" }
+        elseif ($deployContent -match "Start-ADTProcess") { $installerType = "exe" }
+
+        # Read detection script if exists
+        $detectionRule = ""
+        $detectionKey = ""
+        if ($detectScriptPath) {
+            $detectContent = Get-Content -Path $detectScriptPath.FullName -Raw
+            if ($detectContent -match '\$detectionKey\s*=\s*"([^"]+)"') {
+                $detectionKey = $Matches[1]
+            }
+            $detectionRule = $detectContent
+        }
+
+        # Build install/uninstall commands
+        $installCmd = "powershell.exe -ExecutionPolicy Bypass -File `"Invoke-AppDeployToolkit.ps1`" -DeploymentType `"Install`" -DeployMode `"Silent`""
+        $uninstallCmd = "powershell.exe -ExecutionPolicy Bypass -File `"Invoke-AppDeployToolkit.ps1`" -DeploymentType `"Uninstall`" -DeployMode `"Silent`""
+
+        # Get README content
+        $readmePath = Join-Path $packagePath "README.md"
+        $readmeContent = ""
+        if (Test-Path $readmePath) {
+            $readmeContent = Get-Content -Path $readmePath -Raw
+        }
+
+        $packageDetails = @{
+            success = $true
+            package = @{
+                name = $packageName
+                path = $packagePath
+                vendor = $appVendor
+                appName = $appName
+                version = $appVersion
+                architecture = $appArch
+                language = $appLang
+                revision = $appRevision
+                companyPrefix = $companyPrefix
+                installerType = $installerType
+                installCommand = $installCmd
+                uninstallCommand = $uninstallCmd
+                detectionKey = $detectionKey
+                detectionScript = if ($detectScriptPath) { $detectScriptPath.Name } else { "" }
+                detectionRule = $detectionRule
+                readme = $readmeContent
+            }
+        }
+
+        Write-PodeJsonResponse -Value $packageDetails
     }
 
     # API: Delete package
