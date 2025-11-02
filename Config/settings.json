@@ -1,8 +1,8 @@
 {
-  "CompanyPrefix": "MSP",
+  "CompanyPrefix": "SCI",
   "DefaultArch": "x64",
   "DefaultLang": "EN",
+  "OutputPath": "./Output",
   "IncludePSADT": true,
-  "AutoOpenBrowser": true,
-  "OutputPath": "./Output"
+  "AutoOpenBrowser": true
 }
