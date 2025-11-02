@@ -1,0 +1,310 @@
+<#
+
+.SYNOPSIS
+PSAppDeployToolkit - {{APP_NAME}} Installation for Autopilot
+
+.DESCRIPTION
+Simple {{APP_NAME}} installation optimized for Windows Autopilot deployment.
+No previous version checks needed as this runs on fresh systems.
+
+.PARAMETER DeploymentType
+The type of deployment to perform (Install or Uninstall).
+
+.PARAMETER DeployMode
+Installation mode: Auto, Interactive, NonInteractive, or Silent.
+
+.NOTES
+Author: Christoph Ramböck (c@ramboeck.it)
+Version: {{APP_VERSION}}
+Created: {{DATE}}
+Optimized for: Autopilot/Intune Deployment
+
+#>
+
+[CmdletBinding()]
+param
+(
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('Install', 'Uninstall')]
+    [System.String]$DeploymentType,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('Auto', 'Interactive', 'NonInteractive', 'Silent')]
+    [System.String]$DeployMode,
+
+    [Parameter(Mandatory = $false)]
+    [System.Management.Automation.SwitchParameter]$SuppressRebootPassThru,
+
+    [Parameter(Mandatory = $false)]
+    [System.Management.Automation.SwitchParameter]$TerminalServerMode,
+
+    [Parameter(Mandatory = $false)]
+    [System.Management.Automation.SwitchParameter]$DisableLogging
+)
+
+
+##================================================
+## MARK: Variables
+##================================================
+
+$adtSession = @{
+    # App variables
+    AppVendor = '{{APP_VENDOR}}'
+    AppName = '{{APP_NAME}}'
+    AppVersion = '{{APP_VERSION}}'
+    AppArch = '{{APP_ARCH}}'
+    AppLang = '{{APP_LANG}}'
+    AppRevision = '{{APP_REVISION}}'
+    AppSuccessExitCodes = @(0)
+    AppRebootExitCodes = @(1641, 3010)
+    AppProcessesToClose = @({{PROCESSES_TO_CLOSE}})  # Comma-separated process names, e.g. 'app1', 'app2'
+    AppScriptVersion = '1.0.0'
+    AppScriptDate = '{{DATE}}'
+    AppScriptAuthor = 'Christoph Ramböck (c@ramboeck.it)'
+    RequireAdmin = $true
+    
+    # Company/Customer specific
+    CompanyPrefix = '{{COMPANY_PREFIX}}'  # e.g. 'ZSD', 'ACME', 'CONTOSO' - for multi-tenancy
+
+    # Install Titles
+    InstallName = ''
+    InstallTitle = ''
+
+    # Script variables
+    DeployAppScriptFriendlyName = $MyInvocation.MyCommand.Name
+    DeployAppScriptParameters = $PSBoundParameters
+    DeployAppScriptVersion = '4.1.5'
+}
+
+function Install-ADTDeployment
+{
+    [CmdletBinding()]
+    param ()
+
+    ##================================================
+    ## MARK: Pre-Install
+    ##================================================
+    $adtSession.InstallPhase = "Pre-$($adtSession.DeploymentType)"
+
+    Write-ADTLogEntry -Message "Starting {{APP_NAME}} installation (Autopilot mode)" -Severity 1
+
+    ## Show Welcome Message (close processes if running)
+    $saiwParams = @{
+        CheckDiskSpace = $true
+    }
+    if ($adtSession.AppProcessesToClose.Count -gt 0)
+    {
+        $saiwParams.Add('CloseProcesses', $adtSession.AppProcessesToClose)
+    }
+    Show-ADTInstallationWelcome @saiwParams
+
+    ## Show Progress
+    Show-ADTInstallationProgress -StatusMessage "Installing {{APP_NAME}}..."
+
+
+    ##================================================
+    ## MARK: Install
+    ##================================================
+    $adtSession.InstallPhase = $adtSession.DeploymentType
+
+    Write-ADTLogEntry -Message "========================================" -Severity 1
+    Write-ADTLogEntry -Message "INSTALLATION: {{APP_NAME}} ({{INSTALLER_TYPE}})" -Severity 1
+    Write-ADTLogEntry -Message "========================================" -Severity 1
+
+    ## Install {{APP_NAME}} - {{INSTALLER_TYPE}} Installer
+    # Using PSADT v4.1.7 ADT Cmdlets
+    try {
+        Write-ADTLogEntry -Message "Installing {{INSTALLER_FILE}} with parameters: {{SILENT_PARAMS}}" -Severity 1
+
+{{INSTALL_COMMAND}}
+
+        Write-ADTLogEntry -Message "Installation completed successfully" -Severity 1
+    }
+    catch {
+        Write-ADTLogEntry -Message "Installation failed: $($_.Exception.Message)" -Severity 3
+        throw
+    }
+
+
+    ##================================================
+    ## MARK: Post-Install
+    ##================================================
+    $adtSession.InstallPhase = "Post-$($adtSession.DeploymentType)"
+
+    Write-ADTLogEntry -Message "Post-Installation: Configuring {{APP_NAME}}" -Severity 1
+
+    ## <Perform Post-Installation tasks here>
+    
+    # Example: Copy config file (customize if needed)
+    <#
+    $configFile = Join-Path -Path $adtSession.DirFiles -ChildPath "Config\app.config"
+    
+    if (Test-Path -Path $configFile) {
+        $configDestination = "$env:ProgramData\{{APP_VENDOR}}\{{APP_NAME}}"
+        
+        if (-not (Test-Path -Path $configDestination)) {
+            New-Item -Path $configDestination -ItemType Directory -Force | Out-Null
+        }
+        
+        Copy-ADTFile -Path $configFile -Destination $configDestination
+        Write-ADTLogEntry -Message "Configuration file copied" -Severity 1
+    }
+    #>
+
+    ## Create Intune Detection Keys (CENTRALIZED PATTERN)
+    Write-ADTLogEntry -Message "[INFO] Creating Intune detection registry key..." -Severity 1
+
+    # Centralized detection pattern: All apps under one parent key
+    # Example: HKLM:\SOFTWARE\ZSD_IntuneAppInstall\Apps\Adobe-Acrobat Reader DC-25.001.20756-MUI-01-x64
+    # Format: {CompanyPrefix}_IntuneAppInstall\Apps\{Vendor}-{AppName}-{Version}-{Lang}-{Rev}-{Arch}
+
+    $appIdentifier = "$($adtSession.AppVendor)-$($adtSession.AppName)-$($adtSession.AppVersion)-$($adtSession.AppLang)-$($adtSession.AppRevision)-$($adtSession.AppArch)"
+    $regKeyPath = "HKEY_LOCAL_MACHINE\SOFTWARE\{{COMPANY_PREFIX}}_IntuneAppInstall\Apps\$appIdentifier"
+
+    Write-ADTLogEntry -Message "App Identifier: $appIdentifier" -Severity 1
+    Write-ADTLogEntry -Message "Registry Key Path: $regKeyPath" -Severity 1
+
+    # Create registry values with enhanced metadata
+    Set-ADTRegistryKey -Key $regKeyPath -Name 'DisplayName' -Value "$($adtSession.AppVendor) $($adtSession.AppName)"
+    Set-ADTRegistryKey -Key $regKeyPath -Name 'DisplayVersion' -Value $adtSession.AppVersion
+    Set-ADTRegistryKey -Key $regKeyPath -Name 'InstallDate' -Value (Get-Date -Format 'yyyy-MM-dd')
+    Set-ADTRegistryKey -Key $regKeyPath -Name 'Publisher' -Value $adtSession.AppVendor
+    Set-ADTRegistryKey -Key $regKeyPath -Name 'ScriptVersion' -Value $adtSession.AppScriptVersion
+    Set-ADTRegistryKey -Key $regKeyPath -Name 'InstalledBy' -Value $adtSession.AppScriptAuthor
+    Set-ADTRegistryKey -Key $regKeyPath -Name 'Installed' -Value "Y"
+
+    Write-ADTLogEntry -Message "Intune detection registry keys created successfully" -Severity 1
+    
+    Write-ADTLogEntry -Message "{{APP_NAME}} installation completed successfully" -Severity 1
+}
+
+function Uninstall-ADTDeployment
+{
+    [CmdletBinding()]
+    param ()
+
+    ##================================================
+    ## MARK: Pre-Uninstall
+    ##================================================
+    $adtSession.InstallPhase = "Pre-$($adtSession.DeploymentType)"
+
+    Write-ADTLogEntry -Message "Starting {{APP_NAME}} uninstallation" -Severity 1
+
+    ## Close processes if running
+    if ($adtSession.AppProcessesToClose.Count -gt 0)
+    {
+        Show-ADTInstallationWelcome -CloseProcesses $adtSession.AppProcessesToClose -CloseProcessesCountdown 60
+    }
+
+    Show-ADTInstallationProgress -StatusMessage "Uninstalling {{APP_NAME}}..."
+
+
+    ##================================================
+    ## MARK: Uninstall
+    ##================================================
+    $adtSession.InstallPhase = $adtSession.DeploymentType
+
+    Write-ADTLogEntry -Message "Uninstalling {{APP_NAME}} ({{INSTALLER_TYPE}})" -Severity 1
+
+    # Using PSADT v4.1.7 ADT Cmdlets
+    try {
+        Write-ADTLogEntry -Message "Uninstalling {{INSTALLER_FILE}}" -Severity 1
+
+{{UNINSTALL_COMMAND}}
+
+        Write-ADTLogEntry -Message "Uninstallation completed successfully" -Severity 1
+    }
+    catch {
+        Write-ADTLogEntry -Message "Uninstallation failed: $($_.Exception.Message)" -Severity 3
+        # Continue anyway for cleanup
+    }
+    
+    ## Cleanup residual files and registry
+    Write-ADTLogEntry -Message "Cleaning up residual files and registry keys..." -Severity 1
+
+    Remove-ADTFolder -Path "$env:ProgramFiles\{{APP_VENDOR}}\{{APP_NAME}}" -ContinueOnError $true
+    Remove-ADTFolder -Path "$env:ProgramData\{{APP_VENDOR}}\{{APP_NAME}}" -ContinueOnError $true
+
+    # Update/Remove centralized detection registry key
+    $appIdentifier = "$($adtSession.AppVendor)-$($adtSession.AppName)-$($adtSession.AppVersion)-$($adtSession.AppLang)-$($adtSession.AppRevision)-$($adtSession.AppArch)"
+    $regKeyPath = "HKEY_LOCAL_MACHINE\SOFTWARE\{{COMPANY_PREFIX}}_IntuneAppInstall\Apps\$appIdentifier"
+
+    Write-ADTLogEntry -Message "[INFO] Updating Intune detection registry key (uninstalled)..." -Severity 1
+
+    # Option 1: Mark as uninstalled (preserves history)
+    Set-ADTRegistryKey -Key $regKeyPath -Name 'Installed' -Value "N"
+    Set-ADTRegistryKey -Key $regKeyPath -Name 'UninstallDate' -Value (Get-Date -Format 'yyyy-MM-dd')
+
+    # Option 2: Complete removal (uncomment if preferred)
+    # Remove-ADTRegistryKey -Key $regKeyPath -Recurse -ContinueOnError $true
+
+    Write-ADTLogEntry -Message "Detection key updated: $regKeyPath" -Severity 1
+    Write-ADTLogEntry -Message "{{APP_NAME}} uninstallation completed" -Severity 1
+
+
+    ##================================================
+    ## MARK: Post-Uninstall
+    ##================================================
+    $adtSession.InstallPhase = "Post-$($adtSession.DeploymentType)"
+}
+
+
+##================================================
+## MARK: Initialization
+##================================================
+
+$ErrorActionPreference = [System.Management.Automation.ActionPreference]::Stop
+$ProgressPreference = [System.Management.Automation.ActionPreference]::SilentlyContinue
+Set-StrictMode -Version 1
+
+try
+{
+    # Import PSAppDeployToolkit module
+    if (Test-Path -LiteralPath "$PSScriptRoot\PSAppDeployToolkit\PSAppDeployToolkit.psd1" -PathType Leaf)
+    {
+        Get-ChildItem -LiteralPath "$PSScriptRoot\PSAppDeployToolkit" -Recurse -File | Unblock-File -ErrorAction Ignore
+        Import-Module -FullyQualifiedName @{ ModuleName = "$PSScriptRoot\PSAppDeployToolkit\PSAppDeployToolkit.psd1"; Guid = '8c3c366b-8606-4576-9f2d-4051144f7ca2'; ModuleVersion = '4.1.5' } -Force
+    }
+    else
+    {
+        Import-Module -FullyQualifiedName @{ ModuleName = 'PSAppDeployToolkit'; Guid = '8c3c366b-8606-4576-9f2d-4051144f7ca2'; ModuleVersion = '4.1.5' } -Force
+    }
+
+    # Open deployment session
+    $iadtParams = Get-ADTBoundParametersAndDefaultValues -Invocation $MyInvocation
+    $adtSession = Remove-ADTHashtableNullOrEmptyValues -Hashtable $adtSession
+    $adtSession = Open-ADTSession @adtSession @iadtParams -PassThru
+}
+catch
+{
+    $Host.UI.WriteErrorLine((Out-String -InputObject $_ -Width ([System.Int32]::MaxValue)))
+    exit 60008
+}
+
+
+##================================================
+## MARK: Invocation
+##================================================
+
+try
+{
+    # Import extensions
+    Get-ChildItem -LiteralPath $PSScriptRoot -Directory | ForEach-Object {
+        if ($_.Name -match 'PSAppDeployToolkit\..+$')
+        {
+            Get-ChildItem -LiteralPath $_.FullName -Recurse -File | Unblock-File -ErrorAction Ignore
+            Import-Module -Name $_.FullName -Force
+        }
+    }
+
+    # Execute deployment
+    & "$($adtSession.DeploymentType)-ADTDeployment"
+    Close-ADTSession
+}
+catch
+{
+    $mainErrorMessage = "An unhandled error occurred during {{APP_NAME}} deployment.`n$(Resolve-ADTErrorRecord -ErrorRecord $_)"
+    Write-ADTLogEntry -Message $mainErrorMessage -Severity 3
+    Show-ADTInstallationPrompt -Message "{{APP_NAME}} installation failed:`n$($_.Exception.Message)" -ButtonRightText OK -Icon Error -NoWait
+    Close-ADTSession -ExitCode 60001
+}

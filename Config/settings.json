@@ -1,0 +1,8 @@
+{
+  "CompanyPrefix": "MSP",
+  "DefaultArch": "x64",
+  "DefaultLang": "EN",
+  "IncludePSADT": true,
+  "AutoOpenBrowser": true,
+  "OutputPath": "./Output"
+}

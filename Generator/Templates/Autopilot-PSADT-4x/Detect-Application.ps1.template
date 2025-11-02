@@ -1,0 +1,53 @@
+<#
+.SYNOPSIS
+    {{APP_NAME}} - Intune Detection Script
+.DESCRIPTION
+    Detects if {{APP_NAME}} is installed using centralized registry pattern (Multi-Tenant ready)
+.NOTES
+    Author: Christoph Ramböck (c@ramboeck.it)
+    Version: {{APP_VERSION}}
+    Created: {{DATE}}
+    
+    Detection Pattern: HKLM:\SOFTWARE\{CompanyPrefix}_IntuneAppInstall\Apps\{AppIdentifier}
+    App Identifier: {{APP_VENDOR}}-{{APP_NAME}}-{{APP_VERSION}}-{{APP_LANG}}-{{APP_REVISION}}-{{APP_ARCH}}
+#>
+
+try {
+    # Centralized detection key pattern (Multi-Tenant / MSP ready)
+    $appIdentifier = "{{APP_VENDOR}}-{{APP_NAME}}-{{APP_VERSION}}-{{APP_LANG}}-{{APP_REVISION}}-{{APP_ARCH}}"
+    $detectionKey = "HKLM:\SOFTWARE\{{COMPANY_PREFIX}}_IntuneAppInstall\Apps\$appIdentifier"
+
+    if (Test-Path -Path $detectionKey) {
+        # Read all metadata
+        $displayName = Get-ItemPropertyValue -Path $detectionKey -Name "DisplayName" -ErrorAction SilentlyContinue
+        $displayVersion = Get-ItemPropertyValue -Path $detectionKey -Name "DisplayVersion" -ErrorAction SilentlyContinue
+        $installDate = Get-ItemPropertyValue -Path $detectionKey -Name "InstallDate" -ErrorAction SilentlyContinue
+        $publisher = Get-ItemPropertyValue -Path $detectionKey -Name "Publisher" -ErrorAction SilentlyContinue
+        $scriptVersion = Get-ItemPropertyValue -Path $detectionKey -Name "ScriptVersion" -ErrorAction SilentlyContinue
+        $installedBy = Get-ItemPropertyValue -Path $detectionKey -Name "InstalledBy" -ErrorAction SilentlyContinue
+        $installed = Get-ItemPropertyValue -Path $detectionKey -Name "Installed" -ErrorAction SilentlyContinue
+
+        # Check if marked as installed
+        if ($installed -ne "Y") {
+            Write-Output "{{APP_NAME}} registry key exists but marked as uninstalled (Installed=$installed)"
+            exit 1
+        }
+
+        # Verify version match
+        if ($displayVersion -eq "{{APP_VERSION}}") {
+            Write-Output "$displayName detected (Version: $displayVersion, Installed: $installDate, Publisher: $publisher, ScriptVer: $scriptVersion)"
+            exit 0
+        }
+        else {
+            Write-Output "{{APP_NAME}} found but wrong version: $displayVersion (Expected: {{APP_VERSION}})"
+            exit 1
+        }
+    }
+
+    Write-Output "{{APP_NAME}} not detected - Registry key not found: $detectionKey"
+    exit 1
+}
+catch {
+    Write-Output "Detection error: $($_.Exception.Message)"
+    exit 1
+}

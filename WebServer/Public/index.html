@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Package Factory v2.0 - Portable</title>
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <h1>📦 Package Factory v2.0</h1>
+                <p class="subtitle">Portable Autopilot Package Generator</p>
+            </div>
+            <div class="header-actions">
+                <button class="theme-toggle" onclick="toggleTheme()" id="theme-toggle-btn">
+                    <span class="theme-icon" id="theme-icon">🌙</span>
+                    <span id="theme-text">Dark</span>
+                </button>
+                <button class="btn btn-secondary" onclick="showLogs()">📜 Logs</button>
+                <button class="btn btn-secondary" onclick="showSettings()">⚙️ Settings</button>
+                <button class="btn btn-secondary" onclick="showPackages()">📋 Packages</button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Create Package Form -->
+            <section id="create-section" class="section">
+                <h2>🚀 Create New Package</h2>
+
+                <form id="package-form" onsubmit="createPackage(event)">
+                    <div class="form-grid">
+                        <!-- Required Fields -->
+                        <div class="form-group">
+                            <label for="appVendor">Vendor *</label>
+                            <input type="text" id="appVendor" required placeholder="e.g., Adobe, Microsoft">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="appName">Application Name *</label>
+                            <input type="text" id="appName" required placeholder="e.g., Adobe Reader DC">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="appVersion">Version *</label>
+                            <input type="text" id="appVersion" required placeholder="e.g., 24.1.0">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="companyPrefix">Company Prefix</label>
+                            <input type="text" id="companyPrefix" placeholder="e.g., MSP, ZSD, ACME">
+                        </div>
+
+                        <!-- Optional Fields -->
+                        <div class="form-group">
+                            <label for="appArch">Architecture</label>
+                            <select id="appArch">
+                                <option value="x64" selected>x64</option>
+                                <option value="x86">x86</option>
+                                <option value="ARM64">ARM64</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="appLang">Language</label>
+                            <input type="text" id="appLang" placeholder="EN" value="EN">
+                        </div>
+
+                        <!-- Installer Type -->
+                        <div class="form-group">
+                            <label for="installerType">Installer Type *</label>
+                            <select id="installerType" onchange="updateInstallerFields()">
+                                <option value="msi" selected>MSI Installer</option>
+                                <option value="exe">EXE Installer</option>
+                            </select>
+                        </div>
+
+                        <!-- MSI Fields -->
+                        <div class="form-group" id="msi-filename-group">
+                            <label for="msiFilename">MSI Filename</label>
+                            <input type="text" id="msiFilename" placeholder="e.g., setup.msi">
+                        </div>
+
+                        <div class="form-group" id="msi-params-group">
+                            <label for="msiSilentParams">MSI Silent Parameters</label>
+                            <input type="text" id="msiSilentParams" placeholder="/qn /norestart" value="/qn /norestart">
+                        </div>
+
+                        <!-- EXE Fields (hidden by default) -->
+                        <div class="form-group" id="exe-filename-group" style="display: none;">
+                            <label for="exeFilename">EXE Filename *</label>
+                            <input type="text" id="exeFilename" placeholder="e.g., setup.exe">
+                        </div>
+
+                        <div class="form-group" id="exe-params-group" style="display: none;">
+                            <label for="exeSilentParams">EXE Silent Parameters *</label>
+                            <input type="text" id="exeSilentParams" placeholder="e.g., /S /silent">
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label for="processesToClose">Processes to Close (comma-separated)</label>
+                            <input type="text" id="processesToClose" placeholder="e.g., chrome, firefox, outlook">
+                        </div>
+
+                        <div class="form-group checkbox-group full-width">
+                            <label>
+                                <input type="checkbox" id="includePSADT" checked>
+                                Automatically download and include PSAppDeployToolkit 4.1.5
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary" id="create-btn">
+                            🎉 Create Package
+                        </button>
+                        <button type="button" class="btn btn-secondary" onclick="resetForm()">
+                            🔄 Reset
+                        </button>
+                    </div>
+                </form>
+
+                <!-- Result Display -->
+                <div id="result" class="result-box" style="display: none;">
+                    <div id="result-content"></div>
+                </div>
+            </section>
+
+            <!-- Settings Modal -->
+            <div id="settings-modal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h2>⚙️ Settings</h2>
+                        <button class="close-btn" onclick="closeSettings()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="settings-form" onsubmit="saveSettings(event)">
+                            <div class="form-group">
+                                <label for="settingsCompanyPrefix">Default Company Prefix</label>
+                                <input type="text" id="settingsCompanyPrefix" placeholder="MSP">
+                            </div>
+
+                            <div class="form-group">
+                                <label for="settingsDefaultArch">Default Architecture</label>
+                                <select id="settingsDefaultArch">
+                                    <option value="x64">x64</option>
+                                    <option value="x86">x86</option>
+                                    <option value="ARM64">ARM64</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="settingsDefaultLang">Default Language</label>
+                                <input type="text" id="settingsDefaultLang" placeholder="EN">
+                            </div>
+
+                            <div class="form-group">
+                                <label for="settingsOutputPath">Output Path</label>
+                                <input type="text" id="settingsOutputPath" placeholder="./Output">
+                                <small style="display: block; margin-top: 5px; color: #666; font-size: 0.85em;">
+                                    Relative to PackageFactory folder (e.g., ./Output) or absolute path
+                                </small>
+                            </div>
+
+                            <div class="form-group checkbox-group">
+                                <label>
+                                    <input type="checkbox" id="settingsIncludePSADT">
+                                    Always include PSADT by default
+                                </label>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">💾 Save Settings</button>
+                                <button type="button" class="btn btn-secondary" onclick="closeSettings()">Cancel</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Packages Modal -->
+            <div id="packages-modal" class="modal" style="display: none;">
+                <div class="modal-content modal-large">
+                    <div class="modal-header">
+                        <h2>📋 Generated Packages</h2>
+                        <button class="close-btn" onclick="closePackages()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="packages-list"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Logs Modal -->
+            <div id="logs-modal" class="modal" style="display: none;">
+                <div class="modal-content modal-large">
+                    <div class="modal-header">
+                        <h2>📜 System Logs (CMTrace Compatible)</h2>
+                        <button class="close-btn" onclick="closeLogs()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="logs-toolbar">
+                            <div class="logs-filters">
+                                <label>Filter:</label>
+                                <select id="logLevelFilter" onchange="loadLogs()">
+                                    <option value="All">All Levels</option>
+                                    <option value="Info">Info</option>
+                                    <option value="Warning">Warning</option>
+                                    <option value="Error">Error</option>
+                                    <option value="Debug">Debug</option>
+                                </select>
+
+                                <label style="margin-left: 15px;">Show:</label>
+                                <select id="logLimitFilter" onchange="loadLogs()">
+                                    <option value="100">Last 100</option>
+                                    <option value="250">Last 250</option>
+                                    <option value="500">Last 500</option>
+                                    <option value="1000" selected>Last 1000</option>
+                                </select>
+                            </div>
+
+                            <div class="logs-actions">
+                                <button class="btn btn-secondary" onclick="loadLogs()">🔄 Refresh</button>
+                                <button class="btn btn-secondary" onclick="downloadLogs()">💾 Download CMTrace Log</button>
+                                <button class="btn btn-danger" onclick="clearLogs()">🗑️ Clear Logs</button>
+                            </div>
+                        </div>
+
+                        <div id="logs-container" class="logs-output">
+                            <div class="spinner"></div>
+                        </div>
+
+                        <div class="logs-footer">
+                            <span id="logs-count">0 log entries</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Package Details Modal -->
+            <div id="package-details-modal" class="modal" style="display: none;">
+                <div class="modal-content modal-xlarge">
+                    <div class="modal-header">
+                        <h2>📦 Package Details</h2>
+                        <button class="close-btn" onclick="closePackageDetails()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="package-details-content">
+                            <!-- Content will be dynamically loaded -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>© 2025 Ramböck IT - Package Factory v2.0 Portable</p>
+            <p class="footer-links">
+                <a href="mailto:c@ramboeck.it">c@ramboeck.it</a> |
+                <a href="https://ramboeck.it" target="_blank">ramboeck.it</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>
