@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    PackageFactory v2.2 - Pode Web Server
+    PackageFactory v2.2.1 - Pode Web Server
 .DESCRIPTION
     Web server with API endpoints for package generation
 .NOTES
     Author: Christoph Ramboeck (c@ramboeck.it)
-    Version: 2.2.0
+    Version: 2.2.1
 #>
 
 param(
@@ -517,9 +517,9 @@ powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -Depl
 
         # Download PSADT if requested
         if ($IncludePSADT) {
-            Write-CMLog -Message "Downloading PSADT 4.1.5..." -Level Info -Component "CreatePackage" -LogPath $LogPath
-            $psadtUrl = "https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/download/4.1.5/PSAppDeployToolkit_v4.1.5.zip"
-            $psadtZipPath = Join-Path $env:TEMP "PSAppDeployToolkit_v4.1.5.zip"
+            Write-CMLog -Message "Downloading PSADT 4.1.7..." -Level Info -Component "CreatePackage" -LogPath $LogPath
+            $psadtUrl = "https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/download/4.1.7/PSAppDeployToolkit_v4.1.7.zip"
+            $psadtZipPath = Join-Path $env:TEMP "PSAppDeployToolkit_v4.1.7.zip"
             $psadtExtractPath = Join-Path $env:TEMP "PSAppDeployToolkit_Extract"
 
             try {

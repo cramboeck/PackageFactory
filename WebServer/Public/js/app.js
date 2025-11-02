@@ -9,6 +9,20 @@ document.addEventListener('DOMContentLoaded', () => {
 // API Base URL
 const API_BASE = '';
 
+// HTML Escape helper function
+function escapeHtml(text) {
+    if (!text) return '';
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;',
+        '\\': '&#92;'
+    };
+    return String(text).replace(/[&<>"'\\]/g, m => map[m]);
+}
+
 // Theme Management
 function initTheme() {
     const savedTheme = localStorage.getItem('theme') || 'light';
@@ -340,11 +354,27 @@ async function viewPackageDetails(packageName) {
         const appNameNoSpaces = pkg.appName ? pkg.appName.replace(/ /g, '') : 'App';
         const detectionKeyPath = pkg.detectionKey || `HKLM:\\SOFTWARE\\${pkg.companyPrefix}_IntuneAppInstall\\Apps\\${pkg.name}`;
 
+        // Escape all values for safe HTML insertion
+        const safeValues = {
+            name: escapeHtml(pkg.name),
+            vendor: escapeHtml(pkg.vendor || 'N/A'),
+            appName: escapeHtml(pkg.appName || 'N/A'),
+            version: escapeHtml(pkg.version || 'N/A'),
+            architecture: escapeHtml(pkg.architecture || 'N/A'),
+            language: escapeHtml(pkg.language || 'N/A'),
+            installerType: escapeHtml(pkg.installerType).toUpperCase(),
+            path: escapeHtml(pkg.path),
+            detectionKey: escapeHtml(detectionKeyPath),
+            detectionScript: escapeHtml(pkg.detectionScript || ''),
+            installCommand: escapeHtml(pkg.installCommand),
+            uninstallCommand: escapeHtml(pkg.uninstallCommand)
+        };
+
         // Build details HTML (similar to creation success, but adapted for existing packages)
         content.innerHTML = `
             <div class="success-banner">
                 <h3>📦 Package Details</h3>
-                <p><strong>${pkg.name}</strong></p>
+                <p><strong>${safeValues.name}</strong></p>
                 <p>View and copy deployment information</p>
             </div>
 
@@ -353,31 +383,31 @@ async function viewPackageDetails(packageName) {
                     <h3>📦 Package Information</h3>
                     <div class="details-row">
                         <span class="details-label">Vendor:</span>
-                        <span class="details-value">${pkg.vendor || 'N/A'}</span>
+                        <span class="details-value">${safeValues.vendor}</span>
                     </div>
                     <div class="details-row">
                         <span class="details-label">Application:</span>
-                        <span class="details-value">${pkg.appName || 'N/A'}</span>
+                        <span class="details-value">${safeValues.appName}</span>
                     </div>
                     <div class="details-row">
                         <span class="details-label">Version:</span>
-                        <span class="details-value">${pkg.version || 'N/A'}</span>
+                        <span class="details-value">${safeValues.version}</span>
                     </div>
                     <div class="details-row">
                         <span class="details-label">Architecture:</span>
-                        <span class="details-value">${pkg.architecture || 'N/A'}</span>
+                        <span class="details-value">${safeValues.architecture}</span>
                     </div>
                     <div class="details-row">
                         <span class="details-label">Language:</span>
-                        <span class="details-value">${pkg.language || 'N/A'}</span>
+                        <span class="details-value">${safeValues.language}</span>
                     </div>
                     <div class="details-row">
                         <span class="details-label">Installer Type:</span>
-                        <span class="details-value">${pkg.installerType.toUpperCase()}</span>
+                        <span class="details-value">${safeValues.installerType}</span>
                     </div>
                     <div class="details-row">
                         <span class="details-label">Location:</span>
-                        <span class="details-value" style="font-size: 11px;">${pkg.path}</span>
+                        <span class="details-value" style="font-size: 11px;">${safeValues.path}</span>
                     </div>
                 </div>
 
@@ -387,13 +417,13 @@ async function viewPackageDetails(packageName) {
                         <span class="details-label">Registry Path:</span>
                     </div>
                     <div class="command-block" style="margin-top: 10px;">
-                        <button class="copy-btn" onclick="copyToClipboard(this, '${detectionKeyPath}')">📋 Copy</button>
-                        <pre>${detectionKeyPath}</pre>
+                        <button class="copy-btn" data-copy-text="${safeValues.detectionKey}">📋 Copy</button>
+                        <pre>${safeValues.detectionKey}</pre>
                     </div>
                     ${pkg.detectionScript ? `
                     <div class="details-row" style="margin-top: 10px;">
                         <span class="details-label">Detection Script:</span>
-                        <span class="details-value">${pkg.detectionScript}</span>
+                        <span class="details-value">${safeValues.detectionScript}</span>
                     </div>
                     ` : ''}
                 </div>
@@ -403,17 +433,17 @@ async function viewPackageDetails(packageName) {
                 <h3>⚙️ Installation Commands</h3>
                 <strong>Install Command (Interactive):</strong>
                 <div class="command-block">
-                    <button class="copy-btn" onclick="copyToClipboard(this, '.\\\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Interactive')">📋 Copy</button>
+                    <button class="copy-btn" data-copy-text=".\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Interactive">📋 Copy</button>
                     <pre>.\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Interactive</pre>
                 </div>
                 <strong>Install Command (Silent):</strong>
                 <div class="command-block">
-                    <button class="copy-btn" onclick="copyToClipboard(this, '.\\\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Silent')">📋 Copy</button>
+                    <button class="copy-btn" data-copy-text=".\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Silent">📋 Copy</button>
                     <pre>.\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Silent</pre>
                 </div>
                 <strong>Uninstall Command:</strong>
                 <div class="command-block">
-                    <button class="copy-btn" onclick="copyToClipboard(this, '.\\\\Invoke-AppDeployToolkit.ps1 -DeploymentType Uninstall -DeployMode Silent')">📋 Copy</button>
+                    <button class="copy-btn" data-copy-text=".\\Invoke-AppDeployToolkit.ps1 -DeploymentType Uninstall -DeployMode Silent">📋 Copy</button>
                     <pre>.\\Invoke-AppDeployToolkit.ps1 -DeploymentType Uninstall -DeployMode Silent</pre>
                 </div>
             </div>
@@ -422,28 +452,36 @@ async function viewPackageDetails(packageName) {
                 <h3>☁️ Microsoft Intune Commands</h3>
                 <strong>Install Command:</strong>
                 <div class="command-block">
-                    <button class="copy-btn" onclick="copyToClipboard(this, '${pkg.installCommand}')">📋 Copy</button>
-                    <pre>${pkg.installCommand}</pre>
+                    <button class="copy-btn" data-copy-text="${safeValues.installCommand}">📋 Copy</button>
+                    <pre>${safeValues.installCommand}</pre>
                 </div>
                 <strong>Uninstall Command:</strong>
                 <div class="command-block">
-                    <button class="copy-btn" onclick="copyToClipboard(this, '${pkg.uninstallCommand}')">📋 Copy</button>
-                    <pre>${pkg.uninstallCommand}</pre>
+                    <button class="copy-btn" data-copy-text="${safeValues.uninstallCommand}">📋 Copy</button>
+                    <pre>${safeValues.uninstallCommand}</pre>
                 </div>
                 ${pkg.detectionScript ? `
                 <strong>Detection Script:</strong>
                 <div class="command-block">
-                    <button class="copy-btn" onclick="copyToClipboard(this, '${pkg.detectionScript}')">📋 Copy</button>
-                    <pre>${pkg.detectionScript}</pre>
+                    <button class="copy-btn" data-copy-text="${safeValues.detectionScript}">📋 Copy</button>
+                    <pre>${safeValues.detectionScript}</pre>
                 </div>
                 ` : ''}
             </div>
 
             <div class="quick-actions">
-                <button class="btn btn-primary" onclick="openPackageFolder('${pkg.path}')">📂 Open Package Folder</button>
+                <button class="btn btn-primary" data-folder-path="${safeValues.path}" onclick="openPackageFolder(this.getAttribute('data-folder-path'))">📂 Open Package Folder</button>
                 <button class="btn btn-secondary" onclick="closePackageDetails()">✅ Done</button>
             </div>
         `;
+
+        // Add event listeners for copy buttons with data-copy-text
+        content.querySelectorAll('.copy-btn[data-copy-text]').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const text = this.getAttribute('data-copy-text');
+                copyToClipboard(this, text);
+            });
+        });
 
         modal.style.display = 'flex';
     } catch (error) {

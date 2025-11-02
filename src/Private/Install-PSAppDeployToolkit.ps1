@@ -2,7 +2,7 @@
 .SYNOPSIS
     Downloads and installs PSAppDeployToolkit
 .DESCRIPTION
-    Downloads PSAppDeployToolkit 4.1.5 from GitHub and extracts it to the package
+    Downloads PSAppDeployToolkit 4.1.7 from GitHub and extracts it to the package
 #>
 function Install-PSAppDeployToolkit {
     [CmdletBinding()]
@@ -11,8 +11,8 @@ function Install-PSAppDeployToolkit {
         [string]$DestinationPath
     )
 
-    $psadtUrl = "https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/download/4.1.5/PSAppDeployToolkit_v4.1.5.zip"
-    $psadtZipPath = Join-Path $env:TEMP "PSAppDeployToolkit_v4.1.5.zip"
+    $psadtUrl = "https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/download/4.1.7/PSAppDeployToolkit_v4.1.7.zip"
+    $psadtZipPath = Join-Path $env:TEMP "PSAppDeployToolkit_v4.1.7.zip"
     $psadtExtractPath = Join-Path $env:TEMP "PSAppDeployToolkit_Extract"
 
     try {

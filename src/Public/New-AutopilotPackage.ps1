@@ -150,7 +150,7 @@ function New-AutopilotPackage {
                 ""
             }
 
-            # Determine installer commands - PSADT 4.x correct syntax
+            # Determine installer commands - PSADT 4.1.7 correct syntax
             if ($InstallerType -eq 'msi') {
                 $installerFile = if ($MsiFilename) { $MsiFilename } else { "setup.msi" }
                 $silentParams = $MsiSilentParams
@@ -250,7 +250,7 @@ function New-AutopilotPackage {
 
             # Download PSADT if requested
             if ($IncludePSADT) {
-                Write-Verbose "Downloading PSADT 4.1.5..."
+                Write-Verbose "Downloading PSADT 4.1.7..."
                 try {
                     Install-PSAppDeployToolkit -DestinationPath $packagePath
                 }

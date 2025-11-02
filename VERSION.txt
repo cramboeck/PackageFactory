@@ -1,11 +1,16 @@
-PackageFactory v2.2.0
+PackageFactory v2.2.1
 Build Date: 2025-11-02
 Status: Production Ready
 
-New Features (v2.2.0):
+New Features (v2.2.1):
+- ✅ PSADT 4.1.7: Updated download link (fixes 404 error)
+- ✅ JavaScript Fix: HTML escaping for package details
+- ✅ PowerShell 7 Support: PSADT 4.1.7 with PS7 compatibility
+
+Features (v2.2.0):
 - ✅ View Package Details: Access deployment commands anytime
 - ✅ Template Functionality: Duplicate packages for quick creation
-- ✅ PSADT 4.1.7 Fix: Correct commandlets (Start-ADTMsiProcess, Start-ADTProcess)
+- ✅ PSADT Commandlets: Correct syntax (Start-ADTMsiProcess, Start-ADTProcess)
 
 Validation: PASSED ✓
 - 0 Syntax Errors
