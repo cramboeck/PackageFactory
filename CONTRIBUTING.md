@@ -45,24 +45,12 @@ Use the feature request template when creating issues.
    - Add comment-based help to functions
    - Use `SupportsShouldProcess` for destructive operations
 
-3. **Write or update tests**
-   - Add Pester tests for new functionality
-   - Ensure all tests pass locally
-   ```powershell
-   Invoke-Pester ./tests
-   ```
-
-4. **Update documentation**
+3. **Update documentation**
    - Update README.md if needed
    - Update function help
    - Add changelog entry
 
-5. **Run code analysis**
-   ```powershell
-   Invoke-ScriptAnalyzer -Path ./src -Recurse
-   ```
-
-6. **Commit your changes**
+4. **Commit your changes**
    - Use clear, descriptive commit messages
    - Follow conventional commits format:
      ```
@@ -73,7 +61,7 @@ Use the feature request template when creating issues.
      refactor: code refactoring
      ```
 
-7. **Push to your fork** and submit a pull request to `dev` branch
+5. **Push to your fork** and submit a pull request to `dev` branch
 
 ## Development Setup
 
@@ -92,23 +80,14 @@ Use the feature request template when creating issues.
    cd PackageFactory
    ```
 
-2. Install development dependencies
-   ```powershell
-   Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -Scope CurrentUser
-   Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
-   ```
-
-3. Import the module
+2. Import the module
    ```powershell
    Import-Module ./src/PackageFactory.psd1 -Force
    ```
 
-4. Make your changes in the `src/` directory
+3. Make your changes in the `src/` directory
 
-5. Run tests
-   ```powershell
-   Invoke-Pester ./tests -Output Detailed
-   ```
+4. Test your changes manually with the web server or cmdlets
 
 ## Project Structure
 
@@ -119,11 +98,9 @@ PackageFactory/
 │   ├── Private/           # Internal functions
 │   ├── PackageFactory.psd1  # Module manifest
 │   └── PackageFactory.psm1  # Module loader
-├── tests/                 # Pester tests
 ├── WebServer/             # Pode web server
 ├── Generator/             # Templates
-├── .github/               # GitHub workflows and templates
-└── docs/                  # Additional documentation
+└── Config/                # Configuration files
 ```
 
 ## Coding Standards
@@ -180,10 +157,10 @@ function Verb-Noun {
 
 ## Testing
 
-- Write Pester tests for all new functionality
-- Maintain or improve code coverage
-- Test on both Windows PowerShell 5.1 and PowerShell 7.x
-- Test on Windows, Linux (where applicable)
+- Test manually with both Windows PowerShell 5.1 and PowerShell 7.x
+- Test package creation with various applications
+- Test web server functionality
+- PackageFactory is Windows-specific
 
 ## Branch Strategy
 
@@ -196,11 +173,11 @@ function Verb-Noun {
 ## Release Process
 
 1. All changes merged to `dev` branch
-2. Version bumped in manifest
+2. Version bumped in manifest (src/PackageFactory.psd1)
 3. CHANGELOG.md updated
 4. Create release PR from `dev` to `main`
 5. Tag release after merge
-6. GitHub Actions automatically publishes to PowerShell Gallery
+6. Create GitHub release with zip file
 
 ## Questions?
 

@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    Package Factory v2.0 - Pode Web Server
+    PackageFactory v2.2.1 - Pode Web Server
 .DESCRIPTION
     Web server with API endpoints for package generation
 .NOTES
     Author: Christoph Ramboeck (c@ramboeck.it)
-    Version: 2.0.0
+    Version: 2.2.1
 #>
 
 param(
@@ -339,17 +339,57 @@ function New-Package {
             ""
         }
 
-        # Determine installer file and parameters based on type
+        # Determine installer commands - PSADT 4.x correct syntax
         if ($InstallerType -eq 'msi') {
             $installerFile = if ($MsiFilename) { $MsiFilename } else { "setup.msi" }
             $silentParams = $MsiSilentParams
-            $installCmd = "        Install-ADTApplication -FilePath `"`$dirFiles\$installerFile`" -ArgumentList `"$silentParams`""
-            $uninstallCmd = "        Uninstall-ADTApplication -FilePath `"`$dirFiles\$installerFile`" -ArgumentList `"/qn /norestart`""
+
+            # Install command with proper variable usage
+            $installCmd = @"
+        # MSI Installation
+        `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
+        `$arguments = "$silentParams"
+
+        Start-ADTMsiProcess -Action Install -FilePath `$installerPath -Parameters `$arguments
+"@
+
+            # Uninstall command
+            $uninstallCmd = @"
+        # MSI Uninstallation
+        `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
+        `$arguments = "/qn /norestart"
+
+        Start-ADTMsiProcess -Action Uninstall -FilePath `$installerPath -Parameters `$arguments
+"@
         } else {
             $installerFile = if ($ExeFilename) { $ExeFilename } else { "setup.exe" }
             $silentParams = $ExeSilentParams
-            $installCmd = "        Install-ADTApplication -FilePath `"`$dirFiles\$installerFile`" -ArgumentList `"$silentParams`""
-            $uninstallCmd = "        # EXE uninstall - customize as needed`n        Uninstall-ADTApplication -FilePath `"`$dirFiles\uninstall.exe`" -ArgumentList `"$silentParams`""
+
+            # Install command with proper variable usage
+            $installCmd = @"
+        # EXE Installation
+        `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
+        `$arguments = "$silentParams"
+
+        Start-ADTProcess -FilePath `$installerPath -ArgumentList `$arguments -Wait
+"@
+
+            # Uninstall command - customize per application
+            $uninstallCmd = @"
+        # EXE Uninstallation - Customize as needed
+        # Option 1: If uninstaller exists in Files folder
+        `$uninstallerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "uninstall.exe"
+        if (Test-Path -Path `$uninstallerPath) {
+            `$arguments = "$silentParams"
+            Start-ADTProcess -FilePath `$uninstallerPath -ArgumentList `$arguments -Wait
+        }
+
+        # Option 2: Registry-based uninstall string
+        # `$uninstallString = Get-ADTUninstallKey -ApplicationName "$AppName" | Select-Object -ExpandProperty UninstallString
+        # if (`$uninstallString) {
+        #     Start-ADTProcess -FilePath `$uninstallString -ArgumentList "$silentParams" -Wait
+        # }
+"@
         }
 
         $replacements = @{
@@ -475,42 +515,44 @@ powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -Depl
         $filesReadmePath = Join-Path (Join-Path $packagePath "Files") "README.md"
         $filesReadme | Set-Content $filesReadmePath -Encoding UTF8
 
-        # Download PSADT if requested
+        # Copy PSADT if requested
         if ($IncludePSADT) {
-            Write-CMLog -Message "Downloading PSADT 4.1.5..." -Level Info -Component "CreatePackage" -LogPath $LogPath
-            $psadtUrl = "https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/download/4.1.5/PSAppDeployToolkit_v4.1.5.zip"
-            $psadtZipPath = Join-Path $env:TEMP "PSAppDeployToolkit_v4.1.5.zip"
-            $psadtExtractPath = Join-Path $env:TEMP "PSAppDeployToolkit_Extract"
-
+            Write-CMLog -Message "Including PSADT 4.1.7..." -Level Info -Component "CreatePackage" -LogPath $LogPath
             try {
-                $ProgressPreference = 'SilentlyContinue'
-                Invoke-WebRequest -Uri $psadtUrl -OutFile $psadtZipPath -UseBasicParsing
-                Write-CMLog -Message "PSADT downloaded successfully" -Level Info -Component "CreatePackage" -LogPath $LogPath
+                $psadtSourcePath = Join-Path $RootPath "Generator\PSAppDeployToolkit"
 
-                if (Test-Path $psadtExtractPath) {
-                    Remove-Item $psadtExtractPath -Recurse -Force
-                }
-                Expand-Archive -Path $psadtZipPath -DestinationPath $psadtExtractPath -Force
-                Write-CMLog -Message "PSADT extracted successfully" -Level Info -Component "CreatePackage" -LogPath $LogPath
-
-                $psadtSourceFolder = Get-ChildItem -Path $psadtExtractPath -Directory -Recurse |
-                    Where-Object { $_.Name -eq "PSAppDeployToolkit" } |
-                    Select-Object -First 1
-
-                if ($psadtSourceFolder) {
-                    $psadtDestination = Join-Path $packagePath "PSAppDeployToolkit"
-                    Copy-Item -Path $psadtSourceFolder.FullName -Destination $psadtDestination -Recurse -Force
-                    Write-CMLog -Message "PSADT copied to package" -Level Info -Component "CreatePackage" -LogPath $LogPath
-                } else {
-                    Write-CMLog -Message "PSADT folder not found in archive" -Level Warning -Component "CreatePackage" -LogPath $LogPath
+                # Check if source PSADT folder exists
+                if (-not (Test-Path $psadtSourcePath)) {
+                    throw "PSADT source folder not found: $psadtSourcePath. Please download PSADT 4.1.7 and extract to Generator\PSAppDeployToolkit\"
                 }
 
-                Remove-Item $psadtZipPath -Force -ErrorAction SilentlyContinue
-                Remove-Item $psadtExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+                # Check if PSADT module file exists
+                $psadtModule = Join-Path $psadtSourcePath "PSAppDeployToolkit.psd1"
+                if (-not (Test-Path $psadtModule)) {
+                    throw "PSADT module not found: $psadtModule. Please ensure PSAppDeployToolkit is properly extracted."
+                }
+
+                Write-CMLog -Message "Copying PSADT from local folder: $psadtSourcePath" -Level Info -Component "CreatePackage" -LogPath $LogPath
+
+                $psadtDestination = Join-Path $packagePath "PSAppDeployToolkit"
+
+                # Copy PSADT folder
+                Copy-Item -Path $psadtSourcePath -Destination $psadtDestination -Recurse -Force
+                Write-CMLog -Message "PSADT copied to package" -Level Info -Component "CreatePackage" -LogPath $LogPath
+
+                # Remove Invoke-AppDeployToolkit.ps1 if it exists in PSADT folder
+                # (Our generated version is in the package root, not in PSAppDeployToolkit/)
+                $invokeInPSADT = Join-Path $psadtDestination "Invoke-AppDeployToolkit.ps1"
+                if (Test-Path $invokeInPSADT) {
+                    Remove-Item $invokeInPSADT -Force
+                    Write-CMLog -Message "Removed original Invoke-AppDeployToolkit.ps1 from PSADT folder (using generated version)" -Level Info -Component "CreatePackage" -LogPath $LogPath
+                }
+
+                Write-CMLog -Message "PSADT installation completed successfully" -Level Info -Component "CreatePackage" -LogPath $LogPath
             }
             catch {
-                Write-CMLog -Message "PSADT download/extract failed: $($_.Exception.Message)" -Level Warning -Component "CreatePackage" -LogPath $LogPath
-                # PSADT download failed, but package was created
+                Write-CMLog -Message "PSADT copy failed: $($_.Exception.Message). Package created without PSADT." -Level Warning -Component "CreatePackage" -LogPath $LogPath
+                # PSADT copy failed, but package was created
             }
         }
 
@@ -575,9 +617,22 @@ Start-PodeServer {
     # Serve static files - cross-platform paths
     $webServerPath = Join-Path $RootPath "WebServer"
     $publicPath = Join-Path $webServerPath "Public"
-    Add-PodeStaticRoute -Path '/css' -Source (Join-Path $publicPath "css")
-    Add-PodeStaticRoute -Path '/js' -Source (Join-Path $publicPath "js")
-    Add-PodeStaticRoute -Path '/img' -Source (Join-Path $publicPath "img")
+
+    # Only add static routes for directories that actually exist
+    $cssPath = Join-Path $publicPath "css"
+    if (Test-Path $cssPath) {
+        Add-PodeStaticRoute -Path '/css' -Source $cssPath
+    }
+
+    $jsPath = Join-Path $publicPath "js"
+    if (Test-Path $jsPath) {
+        Add-PodeStaticRoute -Path '/js' -Source $jsPath
+    }
+
+    $imgPath = Join-Path $publicPath "img"
+    if (Test-Path $imgPath) {
+        Add-PodeStaticRoute -Path '/img' -Source $imgPath
+    }
 
     # Root page
     Add-PodeRoute -Method Get -Path '/' -ScriptBlock {
@@ -601,18 +656,79 @@ Start-PodeServer {
         Write-PodeJsonResponse -Value @{ success = $true; message = "Configuration saved" }
     }
 
+    # API: Get version info
+    Add-PodeRoute -Method Get -Path '/api/version' -ScriptBlock {
+        $rootPath = $using:RootPath
+        $versionFile = Join-Path $rootPath "VERSION.txt"
+        $version = "2.2.1"
+        $buildDate = "2025-11-02"
+
+        if (Test-Path $versionFile) {
+            $content = Get-Content $versionFile -Raw
+            if ($content -match 'PackageFactory v([\d\.]+)') {
+                $version = $Matches[1]
+            }
+            if ($content -match 'Build Date: ([\d\-]+)') {
+                $buildDate = $Matches[1]
+            }
+        }
+
+        Write-PodeJsonResponse -Value @{
+            version = $version
+            buildDate = $buildDate
+            fullVersion = "PackageFactory v$version"
+        }
+    }
+
     # API: Get logs
     Add-PodeRoute -Method Get -Path '/api/logs' -ScriptBlock {
         $limit = $WebEvent.Query['limit']
         $level = $WebEvent.Query['level']
+        $logPath = $using:LogPath
 
-        # Get LogBuffer reference first, then call ToArray()
-        $logBuffer = $using:LogBuffer
-        $logs = $logBuffer.ToArray()
+        $logs = @()
 
-        # Ensure logs is always an array (not null)
-        if (-not $logs) {
-            $logs = @()
+        # Read logs from file if it exists
+        if (Test-Path $logPath) {
+            try {
+                $logContent = Get-Content -Path $logPath -Raw -ErrorAction SilentlyContinue
+
+                if ($logContent) {
+                    # Parse CMTrace log format
+                    # Format: <![LOG[Message]LOG]!><time="HH:MM:SS.mmm+000" date="MM-DD-YYYY" component="Component" context="" type="1" thread="1234" file="File:Line">
+                    $logLines = $logContent -split "`n" | Where-Object { $_ -match '<!\[LOG\[' }
+
+                    foreach ($line in $logLines) {
+                        if ($line -match '<!\[LOG\[(.*?)\]LOG\]!><time="(.*?)" date="(.*?)" component="(.*?)".*?type="(.*?)".*?file="(.*?)"') {
+                            $message = $Matches[1]
+                            $time = $Matches[2]
+                            $date = $Matches[3]
+                            $component = $Matches[4]
+                            $type = $Matches[5]
+                            $file = $Matches[6]
+
+                            # Map type to level
+                            $levelText = switch ($type) {
+                                "1" { "Info" }
+                                "2" { "Warning" }
+                                "3" { "Error" }
+                                default { "Info" }
+                            }
+
+                            $logs += @{
+                                Timestamp = "$date $time"
+                                Level = $levelText
+                                Component = $component
+                                Message = $message
+                                File = $file
+                            }
+                        }
+                    }
+                }
+            }
+            catch {
+                Write-Warning "Failed to read log file: $_"
+            }
         }
 
         # Filter by level if specified
@@ -628,7 +744,7 @@ Start-PodeServer {
             }
         }
 
-        # Ensure logs is still an array after filtering (Where-Object can return null)
+        # Ensure logs is still an array
         if (-not $logs) {
             $logs = @()
         }
@@ -717,6 +833,111 @@ Start-PodeServer {
         Write-PodeJsonResponse -Value $packages
     }
 
+    # API: Get package details
+    Add-PodeRoute -Method Get -Path '/api/packages/:name/details' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+
+        # Get current OutputPath dynamically from config
+        $currentOutputPath = Get-OutputPath -ConfigPath $using:ConfigPath -RootPath $using:RootPath
+        $packagePath = Join-Path $currentOutputPath $packageName
+
+        if (-not (Test-Path $packagePath)) {
+            Write-PodeJsonResponse -Value @{ success = $false; error = "Package not found" } -StatusCode 404
+            return
+        }
+
+        # Read Invoke-AppDeployToolkit.ps1 to extract metadata
+        $deployScriptPath = Join-Path $packagePath "Invoke-AppDeployToolkit.ps1"
+        $detectScriptPath = Get-ChildItem -Path $packagePath -Filter "Detect-*.ps1" | Select-Object -First 1
+
+        if (-not (Test-Path $deployScriptPath)) {
+            Write-PodeJsonResponse -Value @{ success = $false; error = "Deployment script not found" } -StatusCode 404
+            return
+        }
+
+        # Parse deployment script for metadata
+        $deployContent = Get-Content -Path $deployScriptPath -Raw
+
+        # Extract variables using regex
+        $appVendor = if ($deployContent -match "AppVendor\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+        $appName = if ($deployContent -match "AppName\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+        $appVersion = if ($deployContent -match "AppVersion\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+        $appArch = if ($deployContent -match "AppArch\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+        $appLang = if ($deployContent -match "AppLang\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+        $appRevision = if ($deployContent -match "AppRevision\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+        $companyPrefix = if ($deployContent -match "CompanyPrefix\s*=\s*'([^']+)'") { $Matches[1] } else { "" }
+
+        # Extract installer type and parameters
+        $installerType = "unknown"
+        $installerFilename = ""
+
+        if ($deployContent -match "Start-ADTMsiProcess") {
+            $installerType = "msi"
+            # Extract MSI filename from: Join-Path -Path $adtSession.DirFiles -ChildPath "filename.msi"
+            if ($deployContent -match 'Join-Path -Path \$adtSession\.DirFiles -ChildPath "([^"]+\.msi)"') {
+                $installerFilename = $Matches[1]
+            }
+        }
+        elseif ($deployContent -match "Start-ADTProcess") {
+            $installerType = "exe"
+            # Extract EXE filename from: Join-Path -Path $adtSession.DirFiles -ChildPath "filename.exe"
+            if ($deployContent -match 'Join-Path -Path \$adtSession\.DirFiles -ChildPath "([^"]+\.exe)"') {
+                $installerFilename = $Matches[1]
+            }
+        }
+
+        # Read detection script if exists
+        $detectionRule = ""
+        $detectionKey = ""
+        if ($detectScriptPath) {
+            $detectContent = Get-Content -Path $detectScriptPath.FullName -Raw
+            $detectionRule = $detectContent
+        }
+
+        # Build detection key from extracted values
+        if ($appVendor -and $appName -and $appVersion) {
+            $appIdentifier = "$appVendor-$appName-$appVersion-$appLang-$appRevision-$appArch"
+            $appIdentifier = $appIdentifier -replace '\s+', ''  # Remove spaces
+            $detectionKey = "HKLM:\SOFTWARE\${companyPrefix}_IntuneAppInstall\Apps\$appIdentifier"
+        }
+
+        # Build install/uninstall commands
+        $installCmd = "powershell.exe -ExecutionPolicy Bypass -File `"Invoke-AppDeployToolkit.ps1`" -DeploymentType `"Install`" -DeployMode `"Silent`""
+        $uninstallCmd = "powershell.exe -ExecutionPolicy Bypass -File `"Invoke-AppDeployToolkit.ps1`" -DeploymentType `"Uninstall`" -DeployMode `"Silent`""
+
+        # Get README content
+        $readmePath = Join-Path $packagePath "README.md"
+        $readmeContent = ""
+        if (Test-Path $readmePath) {
+            $readmeContent = Get-Content -Path $readmePath -Raw
+        }
+
+        $packageDetails = @{
+            success = $true
+            package = @{
+                name = $packageName
+                path = $packagePath
+                vendor = $appVendor
+                appName = $appName
+                version = $appVersion
+                architecture = $appArch
+                language = $appLang
+                revision = $appRevision
+                companyPrefix = $companyPrefix
+                installerType = $installerType
+                installerFilename = $installerFilename
+                installCommand = $installCmd
+                uninstallCommand = $uninstallCmd
+                detectionKey = $detectionKey
+                detectionScript = if ($detectScriptPath) { $detectScriptPath.Name } else { "" }
+                detectionRule = $detectionRule
+                readme = $readmeContent
+            }
+        }
+
+        Write-PodeJsonResponse -Value $packageDetails
+    }
+
     # API: Delete package
     Add-PodeRoute -Method Delete -Path '/api/packages/:name' -ScriptBlock {
         $packageName = $WebEvent.Parameters['name']
@@ -731,6 +952,108 @@ Start-PodeServer {
         } else {
             Write-PodeJsonResponse -Value @{ success = $false; error = "Package not found" } -StatusCode 404
         }
+    }
+
+    # API: Validate package
+    Add-PodeRoute -Method Get -Path '/api/packages/:name/validate' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+
+        # Get current OutputPath dynamically from config
+        $currentOutputPath = Get-OutputPath -ConfigPath $using:ConfigPath -RootPath $using:RootPath
+        $packagePath = Join-Path $currentOutputPath $packageName
+
+        if (-not (Test-Path $packagePath)) {
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                valid = $false
+                status = "error"
+                message = "Package not found"
+            } -StatusCode 404
+            return
+        }
+
+        # Read deployment script to get installer filename
+        $deployScriptPath = Join-Path $packagePath "Invoke-AppDeployToolkit.ps1"
+        $filesPath = Join-Path $packagePath "Files"
+
+        $validation = @{
+            success = $true
+            valid = $true
+            status = "valid"
+            messages = @()
+            warnings = @()
+            errors = @()
+            filesFound = @()
+        }
+
+        # Check if deployment script exists
+        if (-not (Test-Path $deployScriptPath)) {
+            $validation.valid = $false
+            $validation.status = "error"
+            $validation.errors += "Deployment script not found"
+        }
+
+        # Check if Files folder exists
+        if (-not (Test-Path $filesPath)) {
+            $validation.valid = $false
+            $validation.status = "error"
+            $validation.errors += "Files folder not found"
+        } else {
+            # Get list of files in Files folder
+            $filesInFolder = Get-ChildItem -Path $filesPath -File -Recurse | Select-Object -ExpandProperty Name
+            $validation.filesFound = $filesInFolder
+
+            # Extract expected installer filename from script
+            if (Test-Path $deployScriptPath) {
+                $deployContent = Get-Content -Path $deployScriptPath -Raw
+
+                $expectedFilename = $null
+                if ($deployContent -match 'Join-Path -Path \$adtSession\.DirFiles -ChildPath "([^"]+\.(msi|exe))"') {
+                    $expectedFilename = $Matches[1]
+                }
+
+                if ($expectedFilename) {
+                    $installerPath = Join-Path $filesPath $expectedFilename
+
+                    if (-not (Test-Path $installerPath)) {
+                        $validation.valid = $false
+                        $validation.status = "warning"
+                        $validation.warnings += "Expected installer not found: $expectedFilename"
+
+                        # Suggest similar files
+                        $similarFiles = $filesInFolder | Where-Object {
+                            $_ -like "*.$($expectedFilename.Split('.')[-1])"
+                        }
+
+                        if ($similarFiles) {
+                            $validation.warnings += "Found similar files: $($similarFiles -join ', ')"
+                        }
+                    } else {
+                        $validation.messages += "Installer found: $expectedFilename"
+                    }
+                } else {
+                    $validation.warnings += "Could not determine expected installer filename"
+                }
+            }
+
+            # Check if Files folder is empty
+            if ($filesInFolder.Count -eq 0) {
+                $validation.valid = $false
+                $validation.status = "warning"
+                $validation.warnings += "Files folder is empty - no installer files found"
+            }
+        }
+
+        # Set final status
+        if ($validation.errors.Count -gt 0) {
+            $validation.status = "error"
+        } elseif ($validation.warnings.Count -gt 0) {
+            $validation.status = "warning"
+        } else {
+            $validation.status = "valid"
+        }
+
+        Write-PodeJsonResponse -Value $validation
     }
 
     # API: Get templates

@@ -4,10 +4,25 @@
 document.addEventListener('DOMContentLoaded', () => {
     loadConfig();
     initTheme();
+    loadVersion();
 });
 
 // API Base URL
 const API_BASE = '';
+
+// HTML Escape helper function
+function escapeHtml(text) {
+    if (!text) return '';
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;',
+        '\\': '&#92;'
+    };
+    return String(text).replace(/[&<>"'\\]/g, m => map[m]);
+}
 
 // Theme Management
 function initTheme() {
@@ -97,6 +112,22 @@ async function loadConfig() {
         window.currentConfig = config;
     } catch (error) {
         console.error('Failed to load config:', error);
+    }
+}
+
+// Load version info
+async function loadVersion() {
+    try {
+        const response = await fetch(`${API_BASE}/api/version`);
+        const versionInfo = await response.json();
+
+        const versionElement = document.getElementById('app-version');
+        if (versionElement) {
+            versionElement.textContent = `Package Factory v${versionInfo.version}`;
+            versionElement.title = `Build Date: ${versionInfo.buildDate}`;
+        }
+    } catch (error) {
+        console.error('Failed to load version:', error);
     }
 }
 
@@ -262,24 +293,75 @@ async function showPackages() {
         if (packages.length === 0) {
             packagesList.innerHTML = '<p class="text-center">No packages created yet.</p>';
         } else {
-            packagesList.innerHTML = packages.map(pkg => `
-                <div class="package-item">
-                    <div class="package-info">
-                        <h3>${pkg.name}</h3>
-                        <p>Created: ${pkg.created}</p>
-                        <p>Path: ${pkg.path}</p>
+            // Load packages with validation status
+            const packagesWithValidation = await Promise.all(packages.map(async pkg => {
+                try {
+                    const validationResponse = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(pkg.name)}/validate`);
+                    const validation = await validationResponse.json();
+                    return { ...pkg, validation };
+                } catch (error) {
+                    return { ...pkg, validation: { status: 'unknown', valid: null } };
+                }
+            }));
+
+            packagesList.innerHTML = packagesWithValidation.map(pkg => {
+                const validationBadge = getValidationBadge(pkg.validation);
+                return `
+                    <div class="package-item">
+                        <div class="package-info">
+                            <h3>${pkg.name} ${validationBadge}</h3>
+                            <p>Created: ${pkg.created}</p>
+                            <p>Path: ${pkg.path}</p>
+                        </div>
+                        <div class="package-actions">
+                            <button class="btn-icon btn-icon-primary" onclick="viewPackageDetails('${pkg.name}')" title="View Details">
+                                📋
+                            </button>
+                            <button class="btn-icon btn-icon-secondary" onclick="useAsTemplate('${pkg.name}')" title="Use as Template">
+                                📑
+                            </button>
+                            <button class="btn-icon btn-icon-danger" onclick="deletePackage('${pkg.name}')" title="Delete Package">
+                                🗑️
+                            </button>
+                        </div>
                     </div>
-                    <div class="package-actions">
-                        <button class="btn btn-danger" onclick="deletePackage('${pkg.name}')">
-                            🗑️ Delete
-                        </button>
-                    </div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
         }
     } catch (error) {
         packagesList.innerHTML = `<p class="text-center error">Failed to load packages: ${error.message}</p>`;
     }
+}
+
+// Get validation badge HTML
+function getValidationBadge(validation) {
+    if (!validation || validation.status === 'unknown') {
+        return '';
+    }
+
+    let icon, className, title;
+
+    switch (validation.status) {
+        case 'valid':
+            icon = '✅';
+            className = 'validation-badge-valid';
+            title = validation.messages.join(', ') || 'Package is valid';
+            break;
+        case 'warning':
+            icon = '⚠️';
+            className = 'validation-badge-warning';
+            title = validation.warnings.join(', ') || 'Package has warnings';
+            break;
+        case 'error':
+            icon = '❌';
+            className = 'validation-badge-error';
+            title = validation.errors.join(', ') || 'Package has errors';
+            break;
+        default:
+            return '';
+    }
+
+    return `<span class="validation-badge ${className}" title="${escapeHtml(title)}">${icon}</span>`;
 }
 
 // Close packages modal
@@ -308,6 +390,228 @@ async function deletePackage(packageName) {
         }
     } catch (error) {
         alert('Failed to delete package: ' + error.message);
+    }
+}
+
+// View package details from existing package
+async function viewPackageDetails(packageName) {
+    try {
+        const response = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(packageName)}/details`);
+        const result = await response.json();
+
+        if (!result.success) {
+            alert('Failed to load package details: ' + (result.error || 'Unknown error'));
+            return;
+        }
+
+        const pkg = result.package;
+
+        // Close packages modal first
+        closePackages();
+
+        // Show details in the package details modal
+        const modal = document.getElementById('package-details-modal');
+        const content = document.getElementById('package-details-content');
+
+        const appNameNoSpaces = pkg.appName ? pkg.appName.replace(/ /g, '') : 'App';
+        const detectionKeyPath = pkg.detectionKey || `HKLM:\\SOFTWARE\\${pkg.companyPrefix}_IntuneAppInstall\\Apps\\${pkg.name}`;
+
+        // Escape all values for safe HTML insertion
+        const safeValues = {
+            name: escapeHtml(pkg.name),
+            vendor: escapeHtml(pkg.vendor || 'N/A'),
+            appName: escapeHtml(pkg.appName || 'N/A'),
+            version: escapeHtml(pkg.version || 'N/A'),
+            architecture: escapeHtml(pkg.architecture || 'N/A'),
+            language: escapeHtml(pkg.language || 'N/A'),
+            installerType: escapeHtml(pkg.installerType).toUpperCase(),
+            path: escapeHtml(pkg.path),
+            detectionKey: escapeHtml(detectionKeyPath),
+            detectionScript: escapeHtml(pkg.detectionScript || ''),
+            installCommand: escapeHtml(pkg.installCommand),
+            uninstallCommand: escapeHtml(pkg.uninstallCommand)
+        };
+
+        // Build details HTML (similar to creation success, but adapted for existing packages)
+        content.innerHTML = `
+            <div class="success-banner">
+                <h3>📦 Package Details</h3>
+                <p><strong>${safeValues.name}</strong></p>
+                <p>View and copy deployment information</p>
+            </div>
+
+            <div class="details-grid">
+                <div class="details-card">
+                    <h3>📦 Package Information</h3>
+                    <div class="details-row">
+                        <span class="details-label">Vendor:</span>
+                        <span class="details-value">${safeValues.vendor}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-label">Application:</span>
+                        <span class="details-value">${safeValues.appName}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-label">Version:</span>
+                        <span class="details-value">${safeValues.version}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-label">Architecture:</span>
+                        <span class="details-value">${safeValues.architecture}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-label">Language:</span>
+                        <span class="details-value">${safeValues.language}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-label">Installer Type:</span>
+                        <span class="details-value">${safeValues.installerType}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-label">Location:</span>
+                        <span class="details-value" style="font-size: 11px;">${safeValues.path}</span>
+                    </div>
+                </div>
+
+                <div class="details-card">
+                    <h3>🔍 Registry Detection</h3>
+                    <div class="details-row">
+                        <span class="details-label">Registry Path:</span>
+                    </div>
+                    <div class="command-block" style="margin-top: 10px;">
+                        <button class="copy-btn" data-copy-text="${safeValues.detectionKey}">📋 Copy</button>
+                        <pre>${safeValues.detectionKey}</pre>
+                    </div>
+                    ${pkg.detectionScript ? `
+                    <div class="details-row" style="margin-top: 10px;">
+                        <span class="details-label">Detection Script:</span>
+                        <span class="details-value">${safeValues.detectionScript}</span>
+                    </div>
+                    ` : ''}
+                </div>
+            </div>
+
+            <div class="details-card">
+                <h3>⚙️ Installation Commands</h3>
+                <strong>Install Command (Interactive):</strong>
+                <div class="command-block">
+                    <button class="copy-btn" data-copy-text=".\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Interactive">📋 Copy</button>
+                    <pre>.\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Interactive</pre>
+                </div>
+                <strong>Install Command (Silent):</strong>
+                <div class="command-block">
+                    <button class="copy-btn" data-copy-text=".\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Silent">📋 Copy</button>
+                    <pre>.\\Invoke-AppDeployToolkit.ps1 -DeploymentType Install -DeployMode Silent</pre>
+                </div>
+                <strong>Uninstall Command:</strong>
+                <div class="command-block">
+                    <button class="copy-btn" data-copy-text=".\\Invoke-AppDeployToolkit.ps1 -DeploymentType Uninstall -DeployMode Silent">📋 Copy</button>
+                    <pre>.\\Invoke-AppDeployToolkit.ps1 -DeploymentType Uninstall -DeployMode Silent</pre>
+                </div>
+            </div>
+
+            <div class="details-card">
+                <h3>☁️ Microsoft Intune Commands</h3>
+                <strong>Install Command:</strong>
+                <div class="command-block">
+                    <button class="copy-btn" data-copy-text="${safeValues.installCommand}">📋 Copy</button>
+                    <pre>${safeValues.installCommand}</pre>
+                </div>
+                <strong>Uninstall Command:</strong>
+                <div class="command-block">
+                    <button class="copy-btn" data-copy-text="${safeValues.uninstallCommand}">📋 Copy</button>
+                    <pre>${safeValues.uninstallCommand}</pre>
+                </div>
+                ${pkg.detectionScript ? `
+                <strong>Detection Script:</strong>
+                <div class="command-block">
+                    <button class="copy-btn" data-copy-text="${safeValues.detectionScript}">📋 Copy</button>
+                    <pre>${safeValues.detectionScript}</pre>
+                </div>
+                ` : ''}
+            </div>
+
+            <div class="quick-actions">
+                <button class="btn btn-primary" data-folder-path="${safeValues.path}" onclick="openPackageFolder(this.getAttribute('data-folder-path'))">📂 Open Package Folder</button>
+                <button class="btn btn-secondary" onclick="closePackageDetails()">✅ Done</button>
+            </div>
+        `;
+
+        // Add event listeners for copy buttons with data-copy-text
+        content.querySelectorAll('.copy-btn[data-copy-text]').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const text = this.getAttribute('data-copy-text');
+                copyToClipboard(this, text);
+            });
+        });
+
+        modal.style.display = 'flex';
+    } catch (error) {
+        alert('Failed to load package details: ' + error.message);
+    }
+}
+
+// Use existing package as template
+async function useAsTemplate(packageName) {
+    try {
+        const response = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(packageName)}/details`);
+        const result = await response.json();
+
+        if (!result.success) {
+            alert('Failed to load package details: ' + (result.error || 'Unknown error'));
+            return;
+        }
+
+        const pkg = result.package;
+
+        // Close packages modal
+        closePackages();
+
+        // Pre-fill the main form with package data (using correct camelCase IDs)
+        const vendorField = document.getElementById('appVendor');
+        const nameField = document.getElementById('appName');
+        const versionField = document.getElementById('appVersion');
+        const archField = document.getElementById('appArch');
+        const langField = document.getElementById('appLang');
+        const installerTypeField = document.getElementById('installerType');
+
+        if (vendorField) vendorField.value = pkg.vendor || '';
+        if (nameField) nameField.value = pkg.appName || '';
+        if (versionField) versionField.value = pkg.version || '';
+        if (archField) archField.value = pkg.architecture || 'x64';
+        if (langField) langField.value = pkg.language || 'EN';
+
+        // Set installer type and trigger update
+        if (installerTypeField && pkg.installerType) {
+            const installerType = pkg.installerType.toLowerCase();
+            if (installerType === 'msi' || installerType === 'exe') {
+                installerTypeField.value = installerType;
+                // Call the global updateInstallerFields function if it exists
+                if (typeof updateInstallerFields === 'function') {
+                    updateInstallerFields();
+                }
+
+                // Set installer filename based on type
+                if (pkg.installerFilename) {
+                    if (installerType === 'msi') {
+                        const msiFilenameField = document.getElementById('msiFilename');
+                        if (msiFilenameField) msiFilenameField.value = pkg.installerFilename;
+                    } else if (installerType === 'exe') {
+                        const exeFilenameField = document.getElementById('exeFilename');
+                        if (exeFilenameField) exeFilenameField.value = pkg.installerFilename;
+                    }
+                }
+            }
+        }
+
+        // Scroll to top of form
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+
+        // Show success notification
+        alert(`Template loaded from: ${pkg.name}\n\nPlease update the version number and adjust other fields as needed before creating the new package.`);
+    } catch (error) {
+        console.error('Template loading error:', error);
+        alert('Failed to load template: ' + error.message);
     }
 }
 

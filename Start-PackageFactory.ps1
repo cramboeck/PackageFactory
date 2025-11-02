@@ -53,60 +53,74 @@ if (Test-Path $podeModulePath) {
     Write-Host "[OK] Using embedded Pode module" -ForegroundColor Green
     $env:PSModulePath = "$podeModulePath;$env:PSModulePath"
 } else {
-    Write-Host "[INFO] Pode module not found, attempting to download..." -ForegroundColor Yellow
+    Write-Host "[WARN] Pode module not found in Modules\ folder" -ForegroundColor Yellow
     Write-Host ""
+    Write-Host "Checking if Pode is already installed globally..." -ForegroundColor Gray
 
-    try {
-        # Ensure TLS 1.2 is enabled (required for PowerShell Gallery)
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    # Check if Pode is already installed in user or system modules
+    $podeInstalled = Get-Module -ListAvailable -Name Pode -ErrorAction SilentlyContinue
 
-        # Trust PowerShell Gallery if needed
-        $psRepository = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
-        if ($psRepository -and $psRepository.InstallationPolicy -ne 'Trusted') {
-            Write-Host "[INFO] Setting PSGallery as trusted repository..." -ForegroundColor Gray
-            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+    if ($podeInstalled) {
+        Write-Host "[OK] Found Pode module installed globally (Version: $($podeInstalled.Version))" -ForegroundColor Green
+        Write-Host ""
+    } else {
+        Write-Host "[INFO] Pode not found. Attempting to download to Modules\ folder..." -ForegroundColor Yellow
+        Write-Host ""
+
+        try {
+            # Ensure TLS 1.2 is enabled (required for PowerShell Gallery)
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+            # Try to install Pode to local Modules folder
+            Write-Host "[INFO] Downloading Pode module from PowerShell Gallery..." -ForegroundColor Gray
+            $modulesPath = Join-Path $ScriptRoot "Modules"
+            $null = New-Item -Path $modulesPath -ItemType Directory -Force
+
+            # Try Save-Module (doesn't require admin or special permissions)
+            Save-Module -Name Pode -Path $modulesPath -Force -ErrorAction Stop
+
+            if (Test-Path $podeModulePath) {
+                $env:PSModulePath = "$modulesPath;$env:PSModulePath"
+                Write-Host "[OK] Pode module downloaded successfully to Modules\ folder" -ForegroundColor Green
+                Write-Host ""
+            }
         }
-
-        # Try to install Pode to local Modules folder
-        Write-Host "[INFO] Downloading Pode module from PowerShell Gallery..." -ForegroundColor Gray
-        $modulesPath = Join-Path $ScriptRoot "Modules"
-        $null = New-Item -Path $modulesPath -ItemType Directory -Force
-
-        Save-Module -Name Pode -Path $modulesPath -Force -ErrorAction Stop
-
-        $env:PSModulePath = "$podeModulePath;$env:PSModulePath"
-        Write-Host "[OK] Pode module downloaded successfully" -ForegroundColor Green
-        Write-Host ""
-    }
-    catch {
-        Write-Host ""
-        Write-Host "[ERROR] Failed to download Pode module" -ForegroundColor Red
-        Write-Host ""
-        Write-Host "Error details: $($_.Exception.Message)" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Host "========================================" -ForegroundColor Yellow
-        Write-Host "  Manual Installation Options" -ForegroundColor Yellow
-        Write-Host "========================================" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Host "Option 1: Install via PowerShell (Recommended)" -ForegroundColor Cyan
-        Write-Host "  Run the following command as Administrator:" -ForegroundColor Gray
-        Write-Host "  Install-Module Pode -Scope CurrentUser -Force" -ForegroundColor White
-        Write-Host ""
-        Write-Host "Option 2: Install to portable folder" -ForegroundColor Cyan
-        Write-Host "  Run the following commands:" -ForegroundColor Gray
-        Write-Host "  Install-Module Pode -Scope CurrentUser" -ForegroundColor White
-        Write-Host "  Copy-Item `"$env:USERPROFILE\Documents\PowerShell\Modules\Pode`" -Destination `"$modulesPath`" -Recurse" -ForegroundColor White
-        Write-Host ""
-        Write-Host "Option 3: Use Docker (No installation needed)" -ForegroundColor Cyan
-        Write-Host "  Run: Start-Docker-Quick.bat" -ForegroundColor White
-        Write-Host ""
-        Write-Host "Troubleshooting:" -ForegroundColor Cyan
-        Write-Host "  - Ensure internet connection is active" -ForegroundColor Gray
-        Write-Host "  - Check if corporate proxy is blocking PowerShell Gallery" -ForegroundColor Gray
-        Write-Host "  - Try running PowerShell as Administrator" -ForegroundColor Gray
-        Write-Host ""
-        Read-Host "Press Enter to exit"
-        exit 1
+        catch {
+            Write-Host ""
+            Write-Host "[ERROR] Failed to download Pode module automatically" -ForegroundColor Red
+            Write-Host ""
+            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "========================================" -ForegroundColor Yellow
+            Write-Host "  QUICK FIX - Choose One:" -ForegroundColor Yellow
+            Write-Host "========================================" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Option 1: Install Pode globally (EASIEST)" -ForegroundColor Cyan
+            Write-Host "  1. Open PowerShell as Administrator" -ForegroundColor White
+            Write-Host "  2. Run: Install-Module Pode -Force" -ForegroundColor White
+            Write-Host "  3. Close this window and run Start-PackageFactory.bat again" -ForegroundColor White
+            Write-Host ""
+            Write-Host "Option 2: Run Setup-PortableMode.bat" -ForegroundColor Cyan
+            Write-Host "  1. Close this window" -ForegroundColor White
+            Write-Host "  2. Right-click Setup-PortableMode.bat → Run as Administrator" -ForegroundColor White
+            Write-Host "  3. Then run Start-PackageFactory.bat again" -ForegroundColor White
+            Write-Host ""
+            Write-Host "Option 3: Use Docker (No PowerShell modules needed)" -ForegroundColor Cyan
+            Write-Host "  Run: Start-Docker-Quick.bat" -ForegroundColor White
+            Write-Host ""
+            Write-Host "Option 4: Manual Download" -ForegroundColor Cyan
+            Write-Host "  1. Go to: https://www.powershellgallery.com/packages/Pode" -ForegroundColor White
+            Write-Host "  2. Download Pode.nupkg" -ForegroundColor White
+            Write-Host "  3. Rename to Pode.zip and extract to: Modules\Pode" -ForegroundColor White
+            Write-Host ""
+            Write-Host "Common Issues:" -ForegroundColor Cyan
+            Write-Host "  - PowerShellGet/PackageManagement too old → Update Windows or install PowerShell 7" -ForegroundColor Gray
+            Write-Host "  - Corporate proxy blocking access → Ask IT or use Option 4 (manual download)" -ForegroundColor Gray
+            Write-Host "  - No admin rights → Use Option 4 or contact your IT admin" -ForegroundColor Gray
+            Write-Host ""
+            Read-Host "Press Enter to exit"
+            exit 1
+        }
     }
 }
 

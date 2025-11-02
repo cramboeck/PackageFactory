@@ -150,18 +150,58 @@ function New-AutopilotPackage {
                 ""
             }
 
-            # Determine installer commands
+            # Determine installer commands - PSADT 4.1.7 correct syntax
             if ($InstallerType -eq 'msi') {
                 $installerFile = if ($MsiFilename) { $MsiFilename } else { "setup.msi" }
                 $silentParams = $MsiSilentParams
-                $installCmd = "        Install-ADTApplication -FilePath `"`$dirFiles\$installerFile`" -ArgumentList `"$silentParams`""
-                $uninstallCmd = "        Uninstall-ADTApplication -FilePath `"`$dirFiles\$installerFile`" -ArgumentList `"/qn /norestart`""
+
+                # Install command with proper variable usage
+                $installCmd = @"
+        # MSI Installation
+        `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
+        `$arguments = "$silentParams"
+
+        Start-ADTMsiProcess -Action Install -FilePath `$installerPath -Parameters `$arguments
+"@
+
+                # Uninstall command
+                $uninstallCmd = @"
+        # MSI Uninstallation
+        `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
+        `$arguments = "/qn /norestart"
+
+        Start-ADTMsiProcess -Action Uninstall -FilePath `$installerPath -Parameters `$arguments
+"@
             }
             else {
                 $installerFile = if ($ExeFilename) { $ExeFilename } else { "setup.exe" }
                 $silentParams = $ExeSilentParams
-                $installCmd = "        Install-ADTApplication -FilePath `"`$dirFiles\$installerFile`" -ArgumentList `"$silentParams`""
-                $uninstallCmd = "        # EXE uninstall - customize as needed`n        Uninstall-ADTApplication -FilePath `"`$dirFiles\uninstall.exe`" -ArgumentList `"$silentParams`""
+
+                # Install command with proper variable usage
+                $installCmd = @"
+        # EXE Installation
+        `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
+        `$arguments = "$silentParams"
+
+        Start-ADTProcess -FilePath `$installerPath -ArgumentList `$arguments -Wait
+"@
+
+                # Uninstall command - customize per application
+                $uninstallCmd = @"
+        # EXE Uninstallation - Customize as needed
+        # Option 1: If uninstaller exists in Files folder
+        `$uninstallerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "uninstall.exe"
+        if (Test-Path -Path `$uninstallerPath) {
+            `$arguments = "$silentParams"
+            Start-ADTProcess -FilePath `$uninstallerPath -ArgumentList `$arguments -Wait
+        }
+
+        # Option 2: Registry-based uninstall string
+        # `$uninstallString = Get-ADTUninstallKey -ApplicationName "$($AppName)" | Select-Object -ExpandProperty UninstallString
+        # if (`$uninstallString) {
+        #     Start-ADTProcess -FilePath `$uninstallString -ArgumentList "$silentParams" -Wait
+        # }
+"@
             }
 
             $replacements = @{
@@ -208,14 +248,16 @@ function New-AutopilotPackage {
             $filesReadmePath = Join-Path $filesPath "README.md"
             $filesReadme | Set-Content $filesReadmePath -Encoding UTF8
 
-            # Download PSADT if requested
+            # Copy PSADT if requested
             if ($IncludePSADT) {
-                Write-Verbose "Downloading PSADT 4.1.5..."
+                Write-Verbose "Including PSADT 4.1.7..."
                 try {
-                    Install-PSAppDeployToolkit -DestinationPath $packagePath
+                    $rootPath = Get-PackageFactoryRoot
+                    $psadtSourcePath = Join-Path $rootPath "Generator\PSAppDeployToolkit"
+                    Install-PSAppDeployToolkit -SourcePath $psadtSourcePath -DestinationPath $packagePath
                 }
                 catch {
-                    Write-Warning "PSADT download failed: $_. Package created without PSADT."
+                    Write-Warning "PSADT copy failed: $_. Package created without PSADT."
                 }
             }
 
