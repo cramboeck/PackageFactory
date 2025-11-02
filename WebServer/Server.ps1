@@ -515,42 +515,44 @@ powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -Depl
         $filesReadmePath = Join-Path (Join-Path $packagePath "Files") "README.md"
         $filesReadme | Set-Content $filesReadmePath -Encoding UTF8
 
-        # Download PSADT if requested
+        # Copy PSADT if requested
         if ($IncludePSADT) {
-            Write-CMLog -Message "Downloading PSADT 4.1.7..." -Level Info -Component "CreatePackage" -LogPath $LogPath
-            $psadtUrl = "https://github.com/PSAppDeployToolkit/PSAppDeployToolkit/releases/download/4.1.7/PSAppDeployToolkit_v4.1.7.zip"
-            $psadtZipPath = Join-Path $env:TEMP "PSAppDeployToolkit_v4.1.7.zip"
-            $psadtExtractPath = Join-Path $env:TEMP "PSAppDeployToolkit_Extract"
-
+            Write-CMLog -Message "Including PSADT 4.1.7..." -Level Info -Component "CreatePackage" -LogPath $LogPath
             try {
-                $ProgressPreference = 'SilentlyContinue'
-                Invoke-WebRequest -Uri $psadtUrl -OutFile $psadtZipPath -UseBasicParsing
-                Write-CMLog -Message "PSADT downloaded successfully" -Level Info -Component "CreatePackage" -LogPath $LogPath
+                $psadtSourcePath = Join-Path $RootPath "Generator\PSAppDeployToolkit"
 
-                if (Test-Path $psadtExtractPath) {
-                    Remove-Item $psadtExtractPath -Recurse -Force
-                }
-                Expand-Archive -Path $psadtZipPath -DestinationPath $psadtExtractPath -Force
-                Write-CMLog -Message "PSADT extracted successfully" -Level Info -Component "CreatePackage" -LogPath $LogPath
-
-                $psadtSourceFolder = Get-ChildItem -Path $psadtExtractPath -Directory -Recurse |
-                    Where-Object { $_.Name -eq "PSAppDeployToolkit" } |
-                    Select-Object -First 1
-
-                if ($psadtSourceFolder) {
-                    $psadtDestination = Join-Path $packagePath "PSAppDeployToolkit"
-                    Copy-Item -Path $psadtSourceFolder.FullName -Destination $psadtDestination -Recurse -Force
-                    Write-CMLog -Message "PSADT copied to package" -Level Info -Component "CreatePackage" -LogPath $LogPath
-                } else {
-                    Write-CMLog -Message "PSADT folder not found in archive" -Level Warning -Component "CreatePackage" -LogPath $LogPath
+                # Check if source PSADT folder exists
+                if (-not (Test-Path $psadtSourcePath)) {
+                    throw "PSADT source folder not found: $psadtSourcePath. Please download PSADT 4.1.7 and extract to Generator\PSAppDeployToolkit\"
                 }
 
-                Remove-Item $psadtZipPath -Force -ErrorAction SilentlyContinue
-                Remove-Item $psadtExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+                # Check if PSADT module file exists
+                $psadtModule = Join-Path $psadtSourcePath "PSAppDeployToolkit.psd1"
+                if (-not (Test-Path $psadtModule)) {
+                    throw "PSADT module not found: $psadtModule. Please ensure PSAppDeployToolkit is properly extracted."
+                }
+
+                Write-CMLog -Message "Copying PSADT from local folder: $psadtSourcePath" -Level Info -Component "CreatePackage" -LogPath $LogPath
+
+                $psadtDestination = Join-Path $packagePath "PSAppDeployToolkit"
+
+                # Copy PSADT folder
+                Copy-Item -Path $psadtSourcePath -Destination $psadtDestination -Recurse -Force
+                Write-CMLog -Message "PSADT copied to package" -Level Info -Component "CreatePackage" -LogPath $LogPath
+
+                # Remove Invoke-AppDeployToolkit.ps1 if it exists in PSADT folder
+                # (Our generated version is in the package root, not in PSAppDeployToolkit/)
+                $invokeInPSADT = Join-Path $psadtDestination "Invoke-AppDeployToolkit.ps1"
+                if (Test-Path $invokeInPSADT) {
+                    Remove-Item $invokeInPSADT -Force
+                    Write-CMLog -Message "Removed original Invoke-AppDeployToolkit.ps1 from PSADT folder (using generated version)" -Level Info -Component "CreatePackage" -LogPath $LogPath
+                }
+
+                Write-CMLog -Message "PSADT installation completed successfully" -Level Info -Component "CreatePackage" -LogPath $LogPath
             }
             catch {
-                Write-CMLog -Message "PSADT download/extract failed: $($_.Exception.Message)" -Level Warning -Component "CreatePackage" -LogPath $LogPath
-                # PSADT download failed, but package was created
+                Write-CMLog -Message "PSADT copy failed: $($_.Exception.Message). Package created without PSADT." -Level Warning -Component "CreatePackage" -LogPath $LogPath
+                # PSADT copy failed, but package was created
             }
         }
 

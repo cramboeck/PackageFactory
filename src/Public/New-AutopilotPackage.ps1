@@ -248,14 +248,16 @@ function New-AutopilotPackage {
             $filesReadmePath = Join-Path $filesPath "README.md"
             $filesReadme | Set-Content $filesReadmePath -Encoding UTF8
 
-            # Download PSADT if requested
+            # Copy PSADT if requested
             if ($IncludePSADT) {
-                Write-Verbose "Downloading PSADT 4.1.7..."
+                Write-Verbose "Including PSADT 4.1.7..."
                 try {
-                    Install-PSAppDeployToolkit -DestinationPath $packagePath
+                    $rootPath = Get-PackageFactoryRoot
+                    $psadtSourcePath = Join-Path $rootPath "Generator\PSAppDeployToolkit"
+                    Install-PSAppDeployToolkit -SourcePath $psadtSourcePath -DestinationPath $packagePath
                 }
                 catch {
-                    Write-Warning "PSADT download failed: $_. Package created without PSADT."
+                    Write-Warning "PSADT copy failed: $_. Package created without PSADT."
                 }
             }
 
