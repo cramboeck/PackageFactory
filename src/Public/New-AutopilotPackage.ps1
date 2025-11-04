@@ -253,7 +253,10 @@ function New-AutopilotPackage {
                 Write-Verbose "Including PSADT 4.1.7..."
                 try {
                     $rootPath = Get-PackageFactoryRoot
-                    $psadtSourcePath = Join-Path $rootPath "Generator\PSAppDeployToolkit"
+                    # PSADT is stored in Generator/PSAppdeploytoolkit/PSAppDeployToolkit/
+                    # (User uploads complete release package, we use the toolkit subfolder)
+                    $psadtTemplatePath = Join-Path $rootPath "Generator\PSAppdeploytoolkit"
+                    $psadtSourcePath = Join-Path $psadtTemplatePath "PSAppDeployToolkit"
                     Install-PSAppDeployToolkit -SourcePath $psadtSourcePath -DestinationPath $packagePath
                 }
                 catch {

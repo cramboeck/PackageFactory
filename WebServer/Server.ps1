@@ -519,11 +519,14 @@ powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -Depl
         if ($IncludePSADT) {
             Write-CMLog -Message "Including PSADT 4.1.7..." -Level Info -Component "CreatePackage" -LogPath $LogPath
             try {
-                $psadtSourcePath = Join-Path $RootPath "Generator\PSAppDeployToolkit"
+                # PSADT is stored in Generator/PSAppdeploytoolkit/PSAppDeployToolkit/
+                # (User uploads complete release package, we use the toolkit subfolder)
+                $psadtTemplatePath = Join-Path $RootPath "Generator\PSAppdeploytoolkit"
+                $psadtSourcePath = Join-Path $psadtTemplatePath "PSAppDeployToolkit"
 
                 # Check if source PSADT folder exists
                 if (-not (Test-Path $psadtSourcePath)) {
-                    throw "PSADT source folder not found: $psadtSourcePath. Please download PSADT 4.1.7 and extract to Generator\PSAppDeployToolkit\"
+                    throw "PSADT source folder not found: $psadtSourcePath. Please download PSADT 4.1.7 and extract to Generator\PSAppdeploytoolkit\"
                 }
 
                 # Check if PSADT module file exists
