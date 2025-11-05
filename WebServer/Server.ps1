@@ -1356,9 +1356,10 @@ Use the Detection.ps1 script included in the package or configure registry detec
             # Debug: Log received data
             Write-Host "Received test connection request" -ForegroundColor Cyan
 
-            $tenantId = $body.TenantId
-            $clientId = $body.ClientId
-            $clientSecret = $body.ClientSecret
+            # Trim all inputs to remove accidental whitespace
+            $tenantId = $body.TenantId.Trim()
+            $clientId = $body.ClientId.Trim()
+            $clientSecret = $body.ClientSecret.Trim()
 
             # Validate inputs
             if ([string]::IsNullOrWhiteSpace($tenantId) -or
@@ -1382,6 +1383,14 @@ Use the Detection.ps1 script included in the package or configure registry detec
             $secretEnd = if ($secretLength -gt 4) { $clientSecret.Substring($secretLength - 4) } else { "" }
             Write-Host "Client Secret Length: $secretLength characters" -ForegroundColor Gray
             Write-Host "Client Secret Format: $secretStart...$secretEnd" -ForegroundColor Gray
+
+            # Check for common issues
+            if ($clientSecret.Contains(" ")) {
+                Write-Host "WARNING: Client Secret contains spaces!" -ForegroundColor Yellow
+            }
+            if ($clientSecret.Length -lt 20) {
+                Write-Host "WARNING: Client Secret seems too short (< 20 chars)" -ForegroundColor Yellow
+            }
 
             # Check if it looks like a UUID (Secret ID instead of Value)
             if ($clientSecret -match '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
