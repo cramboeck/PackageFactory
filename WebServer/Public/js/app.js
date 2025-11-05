@@ -989,6 +989,25 @@ async function testIntuneConnection() {
     }
 }
 
+// View Intune Setup Guide
+async function viewIntuneSetupGuide() {
+    try {
+        const response = await fetch(`${API_BASE}/api/intune/setup-guide`);
+
+        if (!response.ok) {
+            throw new Error('Setup guide not found');
+        }
+
+        const html = await response.text();
+
+        // Open in new window
+        const guideWindow = window.open('', '_blank', 'width=900,height=700');
+        guideWindow.document.write(html);
+    } catch (error) {
+        alert('Error loading setup guide: ' + error.message);
+    }
+}
+
 // Keyboard shortcuts
 document.addEventListener('keydown', (event) => {
     // ESC to close modals

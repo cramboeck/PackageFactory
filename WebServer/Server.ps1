@@ -1324,6 +1324,20 @@ Use the Detection.ps1 script included in the package or configure registry detec
         Write-PodeHtmlResponse -Value "<pre>$guideContent</pre>"
     }
 
+    # API: Get Intune Setup Guide
+    Add-PodeRoute -Method Get -Path '/api/intune/setup-guide' -ScriptBlock {
+        $rootPath = $using:RootPath
+        $guideFile = Join-Path $rootPath "Tools\INTUNE-SETUP.md"
+
+        if (-not (Test-Path $guideFile)) {
+            Write-PodeJsonResponse -Value @{ error = "Setup guide not found" } -StatusCode 404
+            return
+        }
+
+        $guideContent = Get-Content $guideFile -Raw -Encoding UTF8
+        Write-PodeHtmlResponse -Value "<pre style='white-space: pre-wrap; word-wrap: break-word; padding: 20px; background: #1e1e1e; color: #d4d4d4; border-radius: 4px;'>$guideContent</pre>"
+    }
+
     # API: Test Intune Connection
     Add-PodeRoute -Method Post -Path '/api/intune/test-connection' -ScriptBlock {
         # Check if IntuneWin32App module is available
