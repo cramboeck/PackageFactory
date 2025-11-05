@@ -25,6 +25,21 @@ if (Test-Path $packageFactoryModulePath) {
     Write-Warning "PackageFactory module not found at: $packageFactoryModulePath"
 }
 
+# Dot-source required functions for Pode ScriptBlock access
+$getPackageFactoryRootPath = Join-Path (Split-Path -Parent $PSScriptRoot) "src\Private\Get-PackageFactoryRoot.ps1"
+if (Test-Path $getPackageFactoryRootPath) {
+    . $getPackageFactoryRootPath
+    Write-Host "Get-PackageFactoryRoot function loaded" -ForegroundColor Green
+}
+
+$intuneWinFunctionPath = Join-Path (Split-Path -Parent $PSScriptRoot) "src\Public\New-IntuneWinPackage.ps1"
+if (Test-Path $intuneWinFunctionPath) {
+    . $intuneWinFunctionPath
+    Write-Host "New-IntuneWinPackage function loaded" -ForegroundColor Green
+} else {
+    Write-Warning "New-IntuneWinPackage function not found at: $intuneWinFunctionPath"
+}
+
 # Global variables
 $script:RootPath = $RootPath
 $script:GeneratorPath = Join-Path $RootPath "Generator"
@@ -1164,21 +1179,94 @@ Start-PodeServer {
                 return
             }
 
-            # Create IntuneWin package
-            $result = New-IntuneWinPackage -PackagePath $packagePath -IntuneWinAppUtilPath $intuneWinAppUtilPath
+            # Create Intune output directory
+            $intuneOutputPath = Join-Path $packagePath "Intune"
+            if (-not (Test-Path $intuneOutputPath)) {
+                New-Item -Path $intuneOutputPath -ItemType Directory -Force | Out-Null
+            }
 
-            if ($result.Success) {
-                Write-PodeJsonResponse -Value @{
-                    success = $true
-                    message = $result.Message
-                    intunewinFile = $result.IntuneWinName
-                    deploymentGuide = (Test-Path $result.DeploymentGuide)
-                }
-            } else {
+            # Build IntuneWinAppUtil command
+            # Syntax: IntuneWinAppUtil.exe -c <source_folder> -s <setup_file> -o <output_folder> -q
+            $setupFileName = "Invoke-AppDeployToolkit.exe"
+            $arguments = @(
+                "-c", "`"$packagePath`""
+                "-s", "`"$setupFileName`""
+                "-o", "`"$intuneOutputPath`""
+                "-q"  # Quiet mode
+            )
+
+            # Execute IntuneWinAppUtil
+            $process = Start-Process -FilePath $intuneWinAppUtilPath `
+                -ArgumentList $arguments `
+                -Wait `
+                -PassThru `
+                -NoNewWindow `
+                -RedirectStandardOutput (Join-Path $env:TEMP "intunewin_stdout.txt") `
+                -RedirectStandardError (Join-Path $env:TEMP "intunewin_stderr.txt")
+
+            if ($process.ExitCode -ne 0) {
+                $stdout = Get-Content (Join-Path $env:TEMP "intunewin_stdout.txt") -Raw -ErrorAction SilentlyContinue
+                $stderr = Get-Content (Join-Path $env:TEMP "intunewin_stderr.txt") -Raw -ErrorAction SilentlyContinue
                 Write-PodeJsonResponse -Value @{
                     success = $false
-                    error = $result.Error
+                    error = "IntuneWinAppUtil failed with exit code $($process.ExitCode). STDOUT: $stdout STDERR: $stderr"
                 } -StatusCode 500
+                return
+            }
+
+            # Find generated .intunewin file
+            $intunewinFile = Get-ChildItem -Path $intuneOutputPath -Filter "*.intunewin" | Select-Object -First 1
+
+            if (-not $intunewinFile) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "No .intunewin file was created in: $intuneOutputPath"
+                } -StatusCode 500
+                return
+            }
+
+            # Generate deployment guide (simplified inline version)
+            $deploymentGuidePath = Join-Path $intuneOutputPath "DEPLOYMENT-GUIDE.md"
+            $deploymentGuide = @"
+# Intune Deployment Guide
+
+**Package:** $packageName
+**Generated:** $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+
+## Upload to Intune
+
+1. Navigate to **Microsoft Intune Admin Center** → **Apps** → **Windows**
+2. Click **+ Add** → Select **Windows app (Win32)**
+3. Upload the `.intunewin` file from this directory
+
+## Install/Uninstall Commands
+
+**Install Command:**
+``````
+Invoke-AppDeployToolkit.exe -DeploymentType Install
+``````
+
+**Uninstall Command:**
+``````
+Invoke-AppDeployToolkit.exe -DeploymentType Uninstall
+``````
+
+**Install Behavior:** System
+
+## Detection Rules
+
+Use the Detection.ps1 script included in the package or configure registry detection.
+
+---
+**Created with PackageFactory**
+"@
+            $deploymentGuide | Set-Content $deploymentGuidePath -Encoding UTF8
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                message = "IntuneWin package created successfully"
+                intunewinFile = $intunewinFile.Name
+                deploymentGuide = $true
             }
         }
         catch {
