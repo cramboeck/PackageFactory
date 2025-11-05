@@ -1376,6 +1376,23 @@ Use the Detection.ps1 script included in the package or configure registry detec
             Write-Host "Tenant ID: $tenantId" -ForegroundColor Gray
             Write-Host "Client ID: $clientId" -ForegroundColor Gray
 
+            # Debug: Check client secret format
+            $secretLength = $clientSecret.Length
+            $secretStart = $clientSecret.Substring(0, [Math]::Min(4, $secretLength))
+            $secretEnd = if ($secretLength -gt 4) { $clientSecret.Substring($secretLength - 4) } else { "" }
+            Write-Host "Client Secret Length: $secretLength characters" -ForegroundColor Gray
+            Write-Host "Client Secret Format: $secretStart...$secretEnd" -ForegroundColor Gray
+
+            # Check if it looks like a UUID (Secret ID instead of Value)
+            if ($clientSecret -match '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
+                Write-Host "WARNING: Client Secret appears to be a Secret ID (UUID format), not a Secret Value!" -ForegroundColor Red
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "The Client Secret appears to be a Secret ID (UUID format). You must use the Secret VALUE from Azure Portal. When creating a new secret, copy the 'Value' column (not 'Secret ID')."
+                } -StatusCode 400
+                return
+            }
+
             # Convert client secret to secure string
             $secureClientSecret = ConvertTo-SecureString $clientSecret -AsPlainText -Force
 
