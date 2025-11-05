@@ -233,7 +233,29 @@ function showSettings() {
         document.getElementById('settingsDefaultLang').value = window.currentConfig.DefaultLang || 'EN';
         document.getElementById('settingsOutputPath').value = window.currentConfig.OutputPath || './Output';
         document.getElementById('settingsIncludePSADT').checked = window.currentConfig.IncludePSADT !== false;
+
+        // Load Intune Integration settings
+        const intuneConfig = window.currentConfig.IntuneIntegration || {};
+        const intuneEnabled = intuneConfig.Enabled === true;
+
+        document.getElementById('settingsIntuneEnabled').checked = intuneEnabled;
+        document.getElementById('settingsIntuneTenantId').value = intuneConfig.TenantId || '';
+        document.getElementById('settingsIntuneClientId').value = intuneConfig.ClientId || '';
+        document.getElementById('settingsIntuneClientSecret').value = intuneConfig.ClientSecret || '';
+
+        // Show/hide Intune fields based on enabled state
+        toggleIntuneFields();
     }
+
+    // Add event listener for Intune enabled checkbox
+    document.getElementById('settingsIntuneEnabled').addEventListener('change', toggleIntuneFields);
+}
+
+// Toggle Intune configuration fields
+function toggleIntuneFields() {
+    const enabled = document.getElementById('settingsIntuneEnabled').checked;
+    const fieldsDiv = document.getElementById('intune-config-fields');
+    fieldsDiv.style.display = enabled ? 'block' : 'none';
 }
 
 // Close settings modal
@@ -251,7 +273,13 @@ async function saveSettings(event) {
         DefaultLang: document.getElementById('settingsDefaultLang').value.trim() || 'EN',
         OutputPath: document.getElementById('settingsOutputPath').value.trim() || './Output',
         IncludePSADT: document.getElementById('settingsIncludePSADT').checked,
-        AutoOpenBrowser: true
+        AutoOpenBrowser: true,
+        IntuneIntegration: {
+            Enabled: document.getElementById('settingsIntuneEnabled').checked,
+            TenantId: document.getElementById('settingsIntuneTenantId').value.trim(),
+            ClientId: document.getElementById('settingsIntuneClientId').value.trim(),
+            ClientSecret: document.getElementById('settingsIntuneClientSecret').value.trim()
+        }
     };
 
     try {
@@ -906,6 +934,58 @@ async function viewDeploymentGuide(packageName) {
         `);
     } catch (error) {
         alert('Error viewing deployment guide: ' + error.message);
+    }
+}
+
+// Test Intune Connection
+async function testIntuneConnection() {
+    const btn = document.getElementById('testIntuneConnectionBtn');
+    const statusSpan = document.getElementById('intune-connection-status');
+    const originalText = btn.innerHTML;
+
+    try {
+        // Disable button and show progress
+        btn.disabled = true;
+        btn.innerHTML = '⏳ Testing...';
+        statusSpan.innerHTML = '';
+        statusSpan.style.color = '';
+
+        // Get current values
+        const config = {
+            TenantId: document.getElementById('settingsIntuneTenantId').value.trim(),
+            ClientId: document.getElementById('settingsIntuneClientId').value.trim(),
+            ClientSecret: document.getElementById('settingsIntuneClientSecret').value.trim()
+        };
+
+        // Validate fields
+        if (!config.TenantId || !config.ClientId || !config.ClientSecret) {
+            throw new Error('Please fill in all Intune configuration fields');
+        }
+
+        // Call test API
+        const response = await fetch(`${API_BASE}/api/intune/test-connection`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(config)
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            statusSpan.innerHTML = '✅ Connected successfully!';
+            statusSpan.style.color = 'var(--success-color)';
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        } else {
+            throw new Error(result.error || 'Connection test failed');
+        }
+    } catch (error) {
+        statusSpan.innerHTML = '❌ ' + error.message;
+        statusSpan.style.color = 'var(--danger-color)';
+        btn.innerHTML = originalText;
+        btn.disabled = false;
     }
 }
 

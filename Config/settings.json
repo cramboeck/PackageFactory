@@ -4,5 +4,11 @@
   "DefaultLang": "EN",
   "OutputPath": "./Output",
   "IncludePSADT": true,
-  "AutoOpenBrowser": true
+  "AutoOpenBrowser": true,
+  "IntuneIntegration": {
+    "Enabled": false,
+    "TenantId": "",
+    "ClientId": "",
+    "ClientSecret": ""
+  }
 }
