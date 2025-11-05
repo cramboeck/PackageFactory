@@ -25,6 +25,17 @@ if (Test-Path $packageFactoryModulePath) {
     Write-Warning "PackageFactory module not found at: $packageFactoryModulePath"
 }
 
+# Import IntuneWin32App module (for Intune integration)
+try {
+    Import-Module IntuneWin32App -ErrorAction Stop
+    Write-Host "IntuneWin32App module loaded" -ForegroundColor Green
+    $script:IntuneModuleAvailable = $true
+} catch {
+    Write-Warning "IntuneWin32App module not found. Intune integration features will be disabled."
+    Write-Host "Install with: Install-Module -Name IntuneWin32App -Scope CurrentUser" -ForegroundColor Yellow
+    $script:IntuneModuleAvailable = $false
+}
+
 # Dot-source required functions for Pode ScriptBlock access
 $getPackageFactoryRootPath = Join-Path (Split-Path -Parent $PSScriptRoot) "src\Private\Get-PackageFactoryRoot.ps1"
 if (Test-Path $getPackageFactoryRootPath) {
@@ -1311,5 +1322,73 @@ Use the Detection.ps1 script included in the package or configure registry detec
 
         $guideContent = Get-Content $guideFile -Raw
         Write-PodeHtmlResponse -Value "<pre>$guideContent</pre>"
+    }
+
+    # API: Test Intune Connection
+    Add-PodeRoute -Method Post -Path '/api/intune/test-connection' -ScriptBlock {
+        # Check if IntuneWin32App module is available
+        if (-not $using:IntuneModuleAvailable) {
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "IntuneWin32App module not installed. Please install with: Install-Module -Name IntuneWin32App -Scope CurrentUser"
+            } -StatusCode 500
+            return
+        }
+
+        try {
+            # Get credentials from request body
+            $body = $WebEvent.Data
+            $tenantId = $body.TenantId
+            $clientId = $body.ClientId
+            $clientSecret = $body.ClientSecret
+
+            # Validate inputs
+            if ([string]::IsNullOrWhiteSpace($tenantId) -or
+                [string]::IsNullOrWhiteSpace($clientId) -or
+                [string]::IsNullOrWhiteSpace($clientSecret)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Missing required fields: Tenant ID, Client ID, or Client Secret"
+                } -StatusCode 400
+                return
+            }
+
+            # Convert client secret to secure string
+            $secureClientSecret = ConvertTo-SecureString $clientSecret -AsPlainText -Force
+
+            # Try to connect to Microsoft Graph
+            try {
+                Connect-MSIntuneGraph -TenantId $tenantId -ClientSecret $secureClientSecret -ErrorAction Stop | Out-Null
+
+                # Test the connection by trying to get apps (limit to 1 for speed)
+                try {
+                    $testApps = Get-IntuneWin32App -ErrorAction Stop | Select-Object -First 1
+
+                    Write-PodeJsonResponse -Value @{
+                        success = $true
+                        message = "Successfully connected to Microsoft Intune"
+                        tenantId = $tenantId
+                    }
+                }
+                catch {
+                    Write-PodeJsonResponse -Value @{
+                        success = $false
+                        error = "Connected to Graph API, but failed to query Intune apps. Check API permissions: DeviceManagementApps.ReadWrite.All. Error: $($_.Exception.Message)"
+                    } -StatusCode 403
+                }
+            }
+            catch {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Failed to authenticate with Microsoft Graph. Verify Tenant ID, Client ID, and Client Secret are correct. Error: $($_.Exception.Message)"
+                } -StatusCode 401
+            }
+        }
+        catch {
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Test connection failed: $($_.Exception.Message)"
+            } -StatusCode 500
+        }
     }
 }
