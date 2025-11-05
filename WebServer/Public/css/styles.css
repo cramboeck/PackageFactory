@@ -198,6 +198,34 @@ body {
     color: white;
 }
 
+.btn-success:hover {
+    background: #218838;
+    transform: translateY(-2px);
+    box-shadow: var(--shadow);
+}
+
+.btn-warning {
+    background: #ffc107;
+    color: #212529;
+}
+
+.btn-warning:hover {
+    background: #e0a800;
+    transform: translateY(-2px);
+    box-shadow: var(--shadow);
+}
+
+.btn-info {
+    background: #17a2b8;
+    color: white;
+}
+
+.btn-info:hover {
+    background: #138496;
+    transform: translateY(-2px);
+    box-shadow: var(--shadow);
+}
+
 .btn-danger {
     background: var(--danger-color);
     color: white;
@@ -205,6 +233,8 @@ body {
 
 .btn-danger:hover {
     background: #c82333;
+    transform: translateY(-2px);
+    box-shadow: var(--shadow);
 }
 
 /* Icon Buttons (smaller, icon-only) */

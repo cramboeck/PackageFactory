@@ -1085,4 +1085,134 @@ Start-PodeServer {
 
         Write-PodeJsonResponse -Value $templates
     }
+
+    # API: Check IntuneWin status for a package
+    Add-PodeRoute -Method Get -Path '/api/packages/:name/intunewin/status' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+        $packagePath = Join-Path $using:OutputPath $packageName
+
+        if (-not (Test-Path $packagePath)) {
+            Write-PodeJsonResponse -Value @{
+                exists = $false
+                error = "Package not found"
+            } -StatusCode 404
+            return
+        }
+
+        $intuneFolder = Join-Path $packagePath "Intune"
+        $intunewinFile = $null
+        $deploymentGuide = $null
+
+        if (Test-Path $intuneFolder) {
+            $intunewinFile = Get-ChildItem -Path $intuneFolder -Filter "*.intunewin" | Select-Object -First 1
+            $guideFile = Join-Path $intuneFolder "DEPLOYMENT-GUIDE.md"
+            if (Test-Path $guideFile) {
+                $deploymentGuide = $guideFile
+            }
+        }
+
+        Write-PodeJsonResponse -Value @{
+            exists = ($null -ne $intunewinFile)
+            intunewinFile = if ($intunewinFile) { $intunewinFile.Name } else { $null }
+            deploymentGuide = ($null -ne $deploymentGuide)
+            intuneFolder = $intuneFolder
+        }
+    }
+
+    # API: Create IntuneWin package
+    Add-PodeRoute -Method Post -Path '/api/packages/:name/intunewin' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+        $packagePath = Join-Path $using:OutputPath $packageName
+
+        if (-not (Test-Path $packagePath)) {
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Package not found: $packageName"
+            } -StatusCode 404
+            return
+        }
+
+        try {
+            # Check if IntuneWinAppUtil.exe exists
+            $rootPath = $using:RootPath
+            $intuneWinAppUtilPath = Join-Path $rootPath "Tools\IntuneWinAppUtil.exe"
+
+            if (-not (Test-Path $intuneWinAppUtilPath)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "IntuneWinAppUtil.exe not found in Tools directory. Please download from https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool"
+                } -StatusCode 400
+                return
+            }
+
+            # Check if Invoke-AppDeployToolkit.exe exists
+            $setupFile = Join-Path $packagePath "Invoke-AppDeployToolkit.exe"
+            if (-not (Test-Path $setupFile)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Invoke-AppDeployToolkit.exe not found in package. Make sure PSADT is included."
+                } -StatusCode 400
+                return
+            }
+
+            # Create IntuneWin package
+            $result = New-IntuneWinPackage -PackagePath $packagePath -IntuneWinAppUtilPath $intuneWinAppUtilPath
+
+            if ($result.Success) {
+                Write-PodeJsonResponse -Value @{
+                    success = $true
+                    message = $result.Message
+                    intunewinFile = $result.IntuneWinName
+                    deploymentGuide = (Test-Path $result.DeploymentGuide)
+                }
+            } else {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = $result.Error
+                } -StatusCode 500
+            }
+        }
+        catch {
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = $_.Exception.Message
+            } -StatusCode 500
+        }
+    }
+
+    # API: Download IntuneWin file
+    Add-PodeRoute -Method Get -Path '/api/packages/:name/intunewin/download' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+        $packagePath = Join-Path $using:OutputPath $packageName
+        $intuneFolder = Join-Path $packagePath "Intune"
+
+        if (-not (Test-Path $intuneFolder)) {
+            Write-PodeJsonResponse -Value @{ error = "Intune folder not found" } -StatusCode 404
+            return
+        }
+
+        $intunewinFile = Get-ChildItem -Path $intuneFolder -Filter "*.intunewin" | Select-Object -First 1
+
+        if (-not $intunewinFile) {
+            Write-PodeJsonResponse -Value @{ error = "IntuneWin file not found" } -StatusCode 404
+            return
+        }
+
+        Set-PodeResponseAttachment -Path $intunewinFile.FullName
+    }
+
+    # API: Get deployment guide
+    Add-PodeRoute -Method Get -Path '/api/packages/:name/intunewin/guide' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+        $packagePath = Join-Path $using:OutputPath $packageName
+        $guideFile = Join-Path $packagePath "Intune\DEPLOYMENT-GUIDE.md"
+
+        if (-not (Test-Path $guideFile)) {
+            Write-PodeJsonResponse -Value @{ error = "Deployment guide not found" } -StatusCode 404
+            return
+        }
+
+        $guideContent = Get-Content $guideFile -Raw
+        Write-PodeHtmlResponse -Value "<pre>$guideContent</pre>"
+    }
 }

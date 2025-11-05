@@ -531,7 +531,7 @@ async function viewPackageDetails(packageName) {
                 ` : ''}
             </div>
 
-            <div class="quick-actions">
+            <div class="quick-actions" id="quick-actions-placeholder">
                 <button class="btn btn-primary" data-folder-path="${safeValues.path}" onclick="openPackageFolder(this.getAttribute('data-folder-path'))">📂 Open Package Folder</button>
                 <button class="btn btn-secondary" onclick="closePackageDetails()">✅ Done</button>
             </div>
@@ -544,6 +544,34 @@ async function viewPackageDetails(packageName) {
                 copyToClipboard(this, text);
             });
         });
+
+        // Check IntuneWin status and update quick actions
+        try {
+            const intuneResponse = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(packageName)}/intunewin/status`);
+            const intuneStatus = await intuneResponse.json();
+
+            const quickActionsDiv = content.querySelector('#quick-actions-placeholder');
+
+            if (intuneStatus.exists) {
+                // IntuneWin package exists - show download buttons
+                quickActionsDiv.innerHTML = `
+                    <button class="btn btn-primary" data-folder-path="${safeValues.path}" onclick="openPackageFolder(this.getAttribute('data-folder-path'))">📂 Open Package Folder</button>
+                    <button class="btn btn-success" onclick="downloadIntuneWinPackage('${escapeHtml(packageName)}')">⬇️ Download .intunewin</button>
+                    ${intuneStatus.deploymentGuide ? `<button class="btn btn-info" onclick="viewDeploymentGuide('${escapeHtml(packageName)}')">📋 Deployment Guide</button>` : ''}
+                    <button class="btn btn-secondary" onclick="closePackageDetails()">✅ Done</button>
+                `;
+            } else {
+                // IntuneWin doesn't exist - show create button
+                quickActionsDiv.innerHTML = `
+                    <button class="btn btn-primary" data-folder-path="${safeValues.path}" onclick="openPackageFolder(this.getAttribute('data-folder-path'))">📂 Open Package Folder</button>
+                    <button class="btn btn-warning" onclick="createIntuneWinPackage('${escapeHtml(packageName)}')">📦 Create IntuneWin Package</button>
+                    <button class="btn btn-secondary" onclick="closePackageDetails()">✅ Done</button>
+                `;
+            }
+        } catch (error) {
+            console.warn('Failed to check IntuneWin status:', error);
+            // Keep default buttons if status check fails
+        }
 
         modal.style.display = 'flex';
     } catch (error) {
@@ -777,6 +805,108 @@ async function copyToClipboard(button, text) {
 // Open package folder
 function openPackageFolder(path) {
     alert('Package location:\n' + path + '\n\nPlease navigate to this folder in your file explorer.');
+}
+
+// IntuneWin Package Functions
+async function createIntuneWinPackage(packageName) {
+    const button = event.target;
+    const originalText = button.innerHTML;
+
+    try {
+        // Disable button and show progress
+        button.disabled = true;
+        button.innerHTML = '⏳ Creating IntuneWin...';
+
+        const response = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(packageName)}/intunewin`, {
+            method: 'POST'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            button.innerHTML = '✅ IntuneWin Created!';
+            button.classList.add('btn-success');
+
+            // Refresh the details view to show download buttons
+            setTimeout(() => {
+                viewPackageDetails(packageName);
+            }, 1500);
+        } else {
+            button.innerHTML = '❌ Failed';
+            button.classList.add('btn-danger');
+            alert('Failed to create IntuneWin package:\n\n' + result.error);
+
+            // Reset button after 3 seconds
+            setTimeout(() => {
+                button.innerHTML = originalText;
+                button.disabled = false;
+                button.classList.remove('btn-danger');
+            }, 3000);
+        }
+    } catch (error) {
+        button.innerHTML = '❌ Error';
+        button.classList.add('btn-danger');
+        alert('Error creating IntuneWin package: ' + error.message);
+
+        // Reset button after 3 seconds
+        setTimeout(() => {
+            button.innerHTML = originalText;
+            button.disabled = false;
+            button.classList.remove('btn-danger');
+        }, 3000);
+    }
+}
+
+async function downloadIntuneWinPackage(packageName) {
+    try {
+        window.location.href = `${API_BASE}/api/packages/${encodeURIComponent(packageName)}/intunewin/download`;
+    } catch (error) {
+        alert('Error downloading IntuneWin package: ' + error.message);
+    }
+}
+
+async function viewDeploymentGuide(packageName) {
+    try {
+        const response = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(packageName)}/intunewin/guide`);
+
+        if (!response.ok) {
+            throw new Error('Deployment guide not found');
+        }
+
+        const html = await response.text();
+
+        // Open in new window
+        const guideWindow = window.open('', '_blank', 'width=900,height=700');
+        guideWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Deployment Guide - ${packageName}</title>
+                <style>
+                    body {
+                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                        max-width: 900px;
+                        margin: 20px auto;
+                        padding: 20px;
+                        background: #f5f5f5;
+                    }
+                    pre {
+                        background: #1e1e1e;
+                        color: #d4d4d4;
+                        padding: 15px;
+                        border-radius: 4px;
+                        overflow-x: auto;
+                        white-space: pre-wrap;
+                        word-wrap: break-word;
+                    }
+                </style>
+            </head>
+            <body>${html}</body>
+            </html>
+        `);
+    } catch (error) {
+        alert('Error viewing deployment guide: ' + error.message);
+    }
 }
 
 // Keyboard shortcuts
