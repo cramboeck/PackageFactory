@@ -1373,13 +1373,15 @@ Use the Detection.ps1 script included in the package or configure registry detec
             }
 
             Write-Host "Attempting to connect to Microsoft Graph..." -ForegroundColor Yellow
+            Write-Host "Tenant ID: $tenantId" -ForegroundColor Gray
+            Write-Host "Client ID: $clientId" -ForegroundColor Gray
 
             # Convert client secret to secure string
             $secureClientSecret = ConvertTo-SecureString $clientSecret -AsPlainText -Force
 
             # Try to connect to Microsoft Graph
             try {
-                Connect-MSIntuneGraph -TenantId $tenantId -ClientSecret $secureClientSecret -ErrorAction Stop | Out-Null
+                Connect-MSIntuneGraph -TenantId $tenantId -ClientId $clientId -ClientSecret $secureClientSecret -ErrorAction Stop | Out-Null
                 Write-Host "Connected to Graph API successfully" -ForegroundColor Green
 
                 # Test the connection by trying to get apps (limit to 1 for speed)
