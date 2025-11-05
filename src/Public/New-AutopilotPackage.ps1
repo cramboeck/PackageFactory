@@ -161,7 +161,7 @@ function New-AutopilotPackage {
         `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
         `$arguments = "$silentParams"
 
-        Start-ADTMsiProcess -Action Install -FilePath `$installerPath -Parameters `$arguments
+        Start-ADTMsiProcess -Action Install -FilePath `$installerPath -ArgumentList `$arguments
 "@
 
                 # Uninstall command
@@ -170,7 +170,7 @@ function New-AutopilotPackage {
         `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
         `$arguments = "/qn /norestart"
 
-        Start-ADTMsiProcess -Action Uninstall -FilePath `$installerPath -Parameters `$arguments
+        Start-ADTMsiProcess -Action Uninstall -FilePath `$installerPath -ArgumentList `$arguments
 "@
             }
             else {
