@@ -1381,14 +1381,15 @@ Use the Detection.ps1 script included in the package or configure registry detec
 
             # Try to connect to Microsoft Graph
             try {
-                Connect-MSIntuneGraph -TenantId $tenantId -ClientId $clientId -ClientSecret $secureClientSecret -ErrorAction Stop | Out-Null
-                Write-Host "Connected to Graph API successfully" -ForegroundColor Green
+                # Capture warnings during connection attempt
+                $warningMessages = @()
+                $null = Connect-MSIntuneGraph -TenantId $tenantId -ClientId $clientId -ClientSecret $secureClientSecret -ErrorAction Stop -WarningVariable +warningMessages
 
-                # Test the connection by trying to get apps (limit to 1 for speed)
+                # Check if authentication actually succeeded by testing API access
+                Write-Host "Testing Intune API access..." -ForegroundColor Yellow
                 try {
-                    Write-Host "Testing Intune access..." -ForegroundColor Yellow
                     $testApps = Get-IntuneWin32App -ErrorAction Stop | Select-Object -First 1
-                    Write-Host "Intune access verified!" -ForegroundColor Green
+                    Write-Host "Successfully authenticated and connected to Microsoft Intune!" -ForegroundColor Green
 
                     Write-PodeJsonResponse -Value @{
                         success = $true
@@ -1398,12 +1399,46 @@ Use the Detection.ps1 script included in the package or configure registry detec
                     return
                 }
                 catch {
-                    Write-Host "Failed to query Intune apps: $($_.Exception.Message)" -ForegroundColor Red
-                    Write-PodeJsonResponse -Value @{
-                        success = $false
-                        error = "Connected to Graph API, but failed to query Intune apps. Check API permissions: DeviceManagementApps.ReadWrite.All. Error: $($_.Exception.Message)"
-                    } -StatusCode 403
-                    return
+                    # If we can't query apps, authentication likely failed
+                    $errorMsg = $_.Exception.Message
+
+                    # Check if it's an authentication token issue
+                    if ($errorMsg -like "*Authentication token*" -or $errorMsg -like "*not found*") {
+                        Write-Host "Authentication failed - invalid credentials" -ForegroundColor Red
+
+                        # Build detailed error message
+                        $detailedError = "Authentication failed. "
+                        if ($warningMessages.Count -gt 0) {
+                            $warningText = ($warningMessages | Out-String).Trim()
+                            if ($warningText -like "*Invalid client secret*") {
+                                $detailedError += "The Client Secret is invalid. In Azure Portal, you must use the SECRET VALUE (shown only once when created), not the Secret ID. Please create a new Client Secret and copy the value immediately."
+                            }
+                            elseif ($warningText -like "*AADSTS*") {
+                                $detailedError += "Azure AD error: $warningText"
+                            }
+                            else {
+                                $detailedError += $warningText
+                            }
+                        }
+                        else {
+                            $detailedError += "Verify Tenant ID, Client ID, and Client Secret are correct. Error: $errorMsg"
+                        }
+
+                        Write-PodeJsonResponse -Value @{
+                            success = $false
+                            error = $detailedError
+                        } -StatusCode 401
+                        return
+                    }
+                    else {
+                        # Different error - possibly permissions
+                        Write-Host "Failed to query Intune apps: $errorMsg" -ForegroundColor Red
+                        Write-PodeJsonResponse -Value @{
+                            success = $false
+                            error = "Connected to Graph API, but failed to query Intune apps. Check API permissions: DeviceManagementApps.ReadWrite.All must be granted and admin consented. Error: $errorMsg"
+                        } -StatusCode 403
+                        return
+                    }
                 }
             }
             catch {
