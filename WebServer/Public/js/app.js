@@ -971,7 +971,36 @@ async function testIntuneConnection() {
             body: JSON.stringify(config)
         });
 
-        const result = await response.json();
+        // Check if response is ok
+        if (!response.ok) {
+            // Try to get error message from response
+            let errorMessage = `Server error: ${response.status} ${response.statusText}`;
+            try {
+                const errorData = await response.json();
+                if (errorData.error) {
+                    errorMessage = errorData.error;
+                }
+            } catch (e) {
+                // If JSON parsing fails, try to get text
+                try {
+                    const errorText = await response.text();
+                    if (errorText) {
+                        errorMessage = errorText.substring(0, 200); // Limit error message length
+                    }
+                } catch (e2) {
+                    // Keep default error message
+                }
+            }
+            throw new Error(errorMessage);
+        }
+
+        // Parse JSON response
+        let result;
+        try {
+            result = await response.json();
+        } catch (e) {
+            throw new Error('Server returned invalid response. Please check server logs.');
+        }
 
         if (result.success) {
             statusSpan.innerHTML = '✅ Connected successfully!';
@@ -986,6 +1015,7 @@ async function testIntuneConnection() {
         statusSpan.style.color = 'var(--danger-color)';
         btn.innerHTML = originalText;
         btn.disabled = false;
+        console.error('Test connection error:', error);
     }
 }
 

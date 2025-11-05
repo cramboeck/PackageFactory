@@ -1340,18 +1340,22 @@ Use the Detection.ps1 script included in the package or configure registry detec
 
     # API: Test Intune Connection
     Add-PodeRoute -Method Post -Path '/api/intune/test-connection' -ScriptBlock {
-        # Check if IntuneWin32App module is available
-        if (-not $using:IntuneModuleAvailable) {
-            Write-PodeJsonResponse -Value @{
-                success = $false
-                error = "IntuneWin32App module not installed. Please install with: Install-Module -Name IntuneWin32App -Scope CurrentUser"
-            } -StatusCode 500
-            return
-        }
-
         try {
+            # Check if IntuneWin32App module is available
+            if (-not $using:IntuneModuleAvailable) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "IntuneWin32App module not installed. Please install with: Install-Module -Name IntuneWin32App -Scope CurrentUser"
+                } -StatusCode 500
+                return
+            }
+
             # Get credentials from request body
             $body = $WebEvent.Data
+
+            # Debug: Log received data
+            Write-Host "Received test connection request" -ForegroundColor Cyan
+
             $tenantId = $body.TenantId
             $clientId = $body.ClientId
             $clientSecret = $body.ClientSecret
@@ -1360,6 +1364,7 @@ Use the Detection.ps1 script included in the package or configure registry detec
             if ([string]::IsNullOrWhiteSpace($tenantId) -or
                 [string]::IsNullOrWhiteSpace($clientId) -or
                 [string]::IsNullOrWhiteSpace($clientSecret)) {
+                Write-Host "Validation failed: Missing required fields" -ForegroundColor Red
                 Write-PodeJsonResponse -Value @{
                     success = $false
                     error = "Missing required fields: Tenant ID, Client ID, or Client Secret"
@@ -1367,42 +1372,55 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 return
             }
 
+            Write-Host "Attempting to connect to Microsoft Graph..." -ForegroundColor Yellow
+
             # Convert client secret to secure string
             $secureClientSecret = ConvertTo-SecureString $clientSecret -AsPlainText -Force
 
             # Try to connect to Microsoft Graph
             try {
                 Connect-MSIntuneGraph -TenantId $tenantId -ClientSecret $secureClientSecret -ErrorAction Stop | Out-Null
+                Write-Host "Connected to Graph API successfully" -ForegroundColor Green
 
                 # Test the connection by trying to get apps (limit to 1 for speed)
                 try {
+                    Write-Host "Testing Intune access..." -ForegroundColor Yellow
                     $testApps = Get-IntuneWin32App -ErrorAction Stop | Select-Object -First 1
+                    Write-Host "Intune access verified!" -ForegroundColor Green
 
                     Write-PodeJsonResponse -Value @{
                         success = $true
                         message = "Successfully connected to Microsoft Intune"
                         tenantId = $tenantId
                     }
+                    return
                 }
                 catch {
+                    Write-Host "Failed to query Intune apps: $($_.Exception.Message)" -ForegroundColor Red
                     Write-PodeJsonResponse -Value @{
                         success = $false
                         error = "Connected to Graph API, but failed to query Intune apps. Check API permissions: DeviceManagementApps.ReadWrite.All. Error: $($_.Exception.Message)"
                     } -StatusCode 403
+                    return
                 }
             }
             catch {
+                Write-Host "Failed to connect to Graph API: $($_.Exception.Message)" -ForegroundColor Red
                 Write-PodeJsonResponse -Value @{
                     success = $false
                     error = "Failed to authenticate with Microsoft Graph. Verify Tenant ID, Client ID, and Client Secret are correct. Error: $($_.Exception.Message)"
                 } -StatusCode 401
+                return
             }
         }
         catch {
+            Write-Host "Unexpected error in test connection: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "Stack trace: $($_.ScriptStackTrace)" -ForegroundColor Red
             Write-PodeJsonResponse -Value @{
                 success = $false
                 error = "Test connection failed: $($_.Exception.Message)"
             } -StatusCode 500
+            return
         }
     }
 }
