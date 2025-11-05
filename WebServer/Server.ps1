@@ -551,6 +551,17 @@ powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -Depl
                     Write-CMLog -Message "Removed original Invoke-AppDeployToolkit.ps1 from PSADT folder (using generated version)" -Level Info -Component "CreatePackage" -LogPath $LogPath
                 }
 
+                # Copy Invoke-AppDeployToolkit.exe from parent template folder
+                # This EXE is needed for Intune deployments and system context execution
+                $invokeExeSource = Join-Path $psadtTemplatePath "Invoke-AppDeployToolkit.exe"
+                if (Test-Path $invokeExeSource) {
+                    $invokeExeDest = Join-Path $packagePath "Invoke-AppDeployToolkit.exe"
+                    Copy-Item -Path $invokeExeSource -Destination $invokeExeDest -Force
+                    Write-CMLog -Message "Copied Invoke-AppDeployToolkit.exe to package root" -Level Info -Component "CreatePackage" -LogPath $LogPath
+                } else {
+                    Write-CMLog -Message "Invoke-AppDeployToolkit.exe not found at: $invokeExeSource" -Level Warning -Component "CreatePackage" -LogPath $LogPath
+                }
+
                 Write-CMLog -Message "PSADT installation completed successfully" -Level Info -Component "CreatePackage" -LogPath $LogPath
             }
             catch {
