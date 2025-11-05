@@ -16,6 +16,15 @@ param(
 # Import Pode
 Import-Module Pode
 
+# Import PackageFactory module
+$packageFactoryModulePath = Join-Path (Split-Path -Parent $PSScriptRoot) "src\PackageFactory.psd1"
+if (Test-Path $packageFactoryModulePath) {
+    Import-Module $packageFactoryModulePath -Force
+    Write-Host "PackageFactory module loaded" -ForegroundColor Green
+} else {
+    Write-Warning "PackageFactory module not found at: $packageFactoryModulePath"
+}
+
 # Global variables
 $script:RootPath = $RootPath
 $script:GeneratorPath = Join-Path $RootPath "Generator"
