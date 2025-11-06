@@ -1604,7 +1604,7 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 $macKey = $encryptionInfo.macKey
                 $initializationVector = $encryptionInfo.initializationVector
                 $mac = $encryptionInfo.mac
-                $profileIdentifier = $detectionContent.ApplicationInfo.Name
+                $profileIdentifier = "ProfileVersion1"  # Intune only accepts "ProfileVersion1"
                 $fileDigest = $encryptionInfo.fileDigest
                 $fileDigestAlgorithm = $encryptionInfo.fileDigestAlgorithm
 
