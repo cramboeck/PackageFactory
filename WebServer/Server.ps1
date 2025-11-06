@@ -2682,12 +2682,15 @@ Use the Detection.ps1 script included in the package or configure registry detec
 
     # Helper function: Initialize activity log database
     function Initialize-ActivityLogDB {
-        $rootPath = $using:RootPath
-        $dbPath = Join-Path $rootPath "Data\activity-log.db"
-        $schemaPath = Join-Path $rootPath "Data\activity-log.sql"
+        param(
+            [string]$RootPath
+        )
+
+        $dbPath = Join-Path $RootPath "Data\activity-log.db"
+        $schemaPath = Join-Path $RootPath "Data\activity-log.sql"
 
         # Create Data directory if it doesn't exist
-        $dataDir = Join-Path $rootPath "Data"
+        $dataDir = Join-Path $RootPath "Data"
         if (-not (Test-Path $dataDir)) {
             New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
         }
@@ -2697,7 +2700,7 @@ Use the Detection.ps1 script included in the package or configure registry detec
             Write-Host "Initializing activity log database..." -ForegroundColor Yellow
 
             # Load SQLite assembly
-            $assemblyPath = Join-Path $rootPath "Assemblies\System.Data.SQLite.dll"
+            $assemblyPath = Join-Path $RootPath "Assemblies\System.Data.SQLite.dll"
             if (Test-Path $assemblyPath) {
                 Add-Type -Path $assemblyPath -ErrorAction SilentlyContinue
 
@@ -2725,6 +2728,7 @@ Use the Detection.ps1 script included in the package or configure registry detec
     # Helper function: Log activity
     function Add-ActivityLog {
         param(
+            [string]$RootPath,
             [string]$ActionType,
             [string]$AppId = $null,
             [string]$AppName = $null,
@@ -2740,15 +2744,14 @@ Use the Detection.ps1 script included in the package or configure registry detec
         )
 
         try {
-            $rootPath = $using:RootPath
-            $dbPath = Join-Path $rootPath "Data\activity-log.db"
+            $dbPath = Join-Path $RootPath "Data\activity-log.db"
 
             if (-not (Test-Path $dbPath)) {
                 return
             }
 
             # Load SQLite assembly if not loaded
-            $assemblyPath = Join-Path $rootPath "Assemblies\System.Data.SQLite.dll"
+            $assemblyPath = Join-Path $RootPath "Assemblies\System.Data.SQLite.dll"
             if (Test-Path $assemblyPath) {
                 Add-Type -Path $assemblyPath -ErrorAction SilentlyContinue
 
@@ -2787,14 +2790,16 @@ VALUES (@ActionType, @AppId, @AppName, @GroupId, @GroupName, @UserId, @UserName,
 
     # Initialize activity log on server start
     try {
-        Initialize-ActivityLogDB
-        Add-ActivityLog -ActionType "server_start" -Details '{"message": "PackageFactory server started"}' -Success $true
+        $serverRootPath = $using:RootPath
+        Initialize-ActivityLogDB -RootPath $serverRootPath
+        Add-ActivityLog -RootPath $serverRootPath -ActionType "server_start" -Details '{"message": "PackageFactory server started"}' -Success $true
     } catch {
         Write-Host "⚠ Failed to initialize activity log: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 
     # Load additional API routes
-    $routesPath = Join-Path $using:RootPath "WebServer\Routes\IntunePlusApis.ps1"
+    $serverRootPath = $using:RootPath
+    $routesPath = Join-Path $serverRootPath "WebServer\Routes\IntunePlusApis.ps1"
     if (Test-Path $routesPath) {
         . $routesPath
         Write-Host "✓ Loaded extended Intune APIs" -ForegroundColor Green
