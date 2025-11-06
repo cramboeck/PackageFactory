@@ -761,6 +761,9 @@ try {
     Write-Host "⚠ Failed to initialize activity log: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
+# Prepare routes path before Pode starts
+$script:IntunePlusApisPath = Join-Path $script:RootPath "WebServer\Routes\IntunePlusApis.ps1"
+
 # Start Pode Server
 Start-PodeServer {
     # Listen on all interfaces (0.0.0.0) for Docker compatibility
@@ -2797,10 +2800,8 @@ Use the Detection.ps1 script included in the package or configure registry detec
     }
 
     # Load additional API routes
-    $serverRootPath = $using:RootPath
-    $routesPath = Join-Path $serverRootPath "WebServer\Routes\IntunePlusApis.ps1"
-    if (Test-Path $routesPath) {
-        . $routesPath
+    if (Test-Path $using:IntunePlusApisPath) {
+        . $using:IntunePlusApisPath
         Write-Host "✓ Loaded extended Intune APIs" -ForegroundColor Green
     }
 }
