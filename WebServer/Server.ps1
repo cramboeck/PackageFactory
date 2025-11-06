@@ -1198,7 +1198,7 @@ Start-PodeServer {
 
             # Build IntuneWinAppUtil command
             # Syntax: IntuneWinAppUtil.exe -c <source_folder> -s <setup_file> -o <output_folder> -q
-            $setupFileName = "Invoke-AppDeployToolkit.exe"
+            $setupFileName = "Invoke-AppDeployToolkit.ps1"  # MUST match setupFilePath in app creation!
             $arguments = @(
                 "-c", "`"$packagePath`""
                 "-s", "`"$setupFileName`""
