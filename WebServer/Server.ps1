@@ -641,6 +641,126 @@ if (-not (Test-Path $script:OutputPath)) {
 
 Write-Host "Output path: $script:OutputPath" -ForegroundColor Cyan
 
+# ==========================================
+# ACTIVITY LOG HELPER FUNCTIONS (Global Scope)
+# ==========================================
+
+# Helper function: Initialize activity log database
+function script:Initialize-ActivityLogDB {
+    param(
+        [string]$RootPath
+    )
+
+    $dbPath = Join-Path $RootPath "Data\activity-log.db"
+    $schemaPath = Join-Path $RootPath "Data\activity-log.sql"
+
+    # Create Data directory if it doesn't exist
+    $dataDir = Join-Path $RootPath "Data"
+    if (-not (Test-Path $dataDir)) {
+        New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+    }
+
+    # Create database if it doesn't exist
+    if (-not (Test-Path $dbPath)) {
+        Write-Host "Initializing activity log database..." -ForegroundColor Yellow
+
+        # Load SQLite assembly
+        $assemblyPath = Join-Path $RootPath "Assemblies\System.Data.SQLite.dll"
+        if (Test-Path $assemblyPath) {
+            Add-Type -Path $assemblyPath -ErrorAction SilentlyContinue
+
+            # Create database and execute schema
+            $connectionString = "Data Source=$dbPath;Version=3;"
+            $connection = New-Object System.Data.SQLite.SQLiteConnection($connectionString)
+            $connection.Open()
+
+            $schema = Get-Content $schemaPath -Raw
+            $command = $connection.CreateCommand()
+            $command.CommandText = $schema
+            $command.ExecuteNonQuery() | Out-Null
+
+            $connection.Close()
+
+            Write-Host "✓ Activity log database initialized" -ForegroundColor Green
+        } else {
+            Write-Host "⚠ SQLite assembly not found, activity logging disabled" -ForegroundColor Yellow
+        }
+    }
+
+    return $dbPath
+}
+
+# Helper function: Log activity
+function script:Add-ActivityLog {
+    param(
+        [string]$RootPath,
+        [string]$ActionType,
+        [string]$AppId = $null,
+        [string]$AppName = $null,
+        [string]$GroupId = $null,
+        [string]$GroupName = $null,
+        [string]$UserId = $null,
+        [string]$UserName = $null,
+        [string]$Intent = $null,
+        [string]$Details = $null,
+        [bool]$Success = $true,
+        [string]$ErrorMessage = $null,
+        [string]$IpAddress = $null
+    )
+
+    try {
+        $dbPath = Join-Path $RootPath "Data\activity-log.db"
+
+        if (-not (Test-Path $dbPath)) {
+            return
+        }
+
+        # Load SQLite assembly if not loaded
+        $assemblyPath = Join-Path $RootPath "Assemblies\System.Data.SQLite.dll"
+        if (Test-Path $assemblyPath) {
+            Add-Type -Path $assemblyPath -ErrorAction SilentlyContinue
+
+            $connectionString = "Data Source=$dbPath;Version=3;"
+            $connection = New-Object System.Data.SQLite.SQLiteConnection($connectionString)
+            $connection.Open()
+
+            $sql = @"
+INSERT INTO activity_log (action_type, app_id, app_name, group_id, group_name, user_id, user_name, intent, details, success, error_message, ip_address)
+VALUES (@ActionType, @AppId, @AppName, @GroupId, @GroupName, @UserId, @UserName, @Intent, @Details, @Success, @ErrorMessage, @IpAddress)
+"@
+
+            $command = $connection.CreateCommand()
+            $command.CommandText = $sql
+            $command.Parameters.AddWithValue("@ActionType", $ActionType) | Out-Null
+            $command.Parameters.AddWithValue("@AppId", [string]$AppId) | Out-Null
+            $command.Parameters.AddWithValue("@AppName", [string]$AppName) | Out-Null
+            $command.Parameters.AddWithValue("@GroupId", [string]$GroupId) | Out-Null
+            $command.Parameters.AddWithValue("@GroupName", [string]$GroupName) | Out-Null
+            $command.Parameters.AddWithValue("@UserId", [string]$UserId) | Out-Null
+            $command.Parameters.AddWithValue("@UserName", [string]$UserName) | Out-Null
+            $command.Parameters.AddWithValue("@Intent", [string]$Intent) | Out-Null
+            $command.Parameters.AddWithValue("@Details", [string]$Details) | Out-Null
+            $command.Parameters.AddWithValue("@Success", [int]$Success) | Out-Null
+            $command.Parameters.AddWithValue("@ErrorMessage", [string]$ErrorMessage) | Out-Null
+            $command.Parameters.AddWithValue("@IpAddress", [string]$IpAddress) | Out-Null
+
+            $command.ExecuteNonQuery() | Out-Null
+            $connection.Close()
+        }
+
+    } catch {
+        Write-Host "⚠ Failed to log activity: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# Initialize activity log on server start (BEFORE Pode starts)
+try {
+    Initialize-ActivityLogDB -RootPath $script:RootPath
+    Add-ActivityLog -RootPath $script:RootPath -ActionType "server_start" -Details '{"message": "PackageFactory server started"}' -Success $true
+} catch {
+    Write-Host "⚠ Failed to initialize activity log: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
 # Start Pode Server
 Start-PodeServer {
     # Listen on all interfaces (0.0.0.0) for Docker compatibility
@@ -2674,127 +2794,6 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 error = "Failed to create deployment groups: $errorMsg"
             } -StatusCode 500
         }
-    }
-
-    # ==========================================
-    # ACTIVITY LOG HELPER FUNCTIONS
-    # ==========================================
-
-    # Helper function: Initialize activity log database
-    function Initialize-ActivityLogDB {
-        param(
-            [string]$RootPath
-        )
-
-        $dbPath = Join-Path $RootPath "Data\activity-log.db"
-        $schemaPath = Join-Path $RootPath "Data\activity-log.sql"
-
-        # Create Data directory if it doesn't exist
-        $dataDir = Join-Path $RootPath "Data"
-        if (-not (Test-Path $dataDir)) {
-            New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
-        }
-
-        # Create database if it doesn't exist
-        if (-not (Test-Path $dbPath)) {
-            Write-Host "Initializing activity log database..." -ForegroundColor Yellow
-
-            # Load SQLite assembly
-            $assemblyPath = Join-Path $RootPath "Assemblies\System.Data.SQLite.dll"
-            if (Test-Path $assemblyPath) {
-                Add-Type -Path $assemblyPath -ErrorAction SilentlyContinue
-
-                # Create database and execute schema
-                $connectionString = "Data Source=$dbPath;Version=3;"
-                $connection = New-Object System.Data.SQLite.SQLiteConnection($connectionString)
-                $connection.Open()
-
-                $schema = Get-Content $schemaPath -Raw
-                $command = $connection.CreateCommand()
-                $command.CommandText = $schema
-                $command.ExecuteNonQuery() | Out-Null
-
-                $connection.Close()
-
-                Write-Host "✓ Activity log database initialized" -ForegroundColor Green
-            } else {
-                Write-Host "⚠ SQLite assembly not found, activity logging disabled" -ForegroundColor Yellow
-            }
-        }
-
-        return $dbPath
-    }
-
-    # Helper function: Log activity
-    function Add-ActivityLog {
-        param(
-            [string]$RootPath,
-            [string]$ActionType,
-            [string]$AppId = $null,
-            [string]$AppName = $null,
-            [string]$GroupId = $null,
-            [string]$GroupName = $null,
-            [string]$UserId = $null,
-            [string]$UserName = $null,
-            [string]$Intent = $null,
-            [string]$Details = $null,
-            [bool]$Success = $true,
-            [string]$ErrorMessage = $null,
-            [string]$IpAddress = $null
-        )
-
-        try {
-            $dbPath = Join-Path $RootPath "Data\activity-log.db"
-
-            if (-not (Test-Path $dbPath)) {
-                return
-            }
-
-            # Load SQLite assembly if not loaded
-            $assemblyPath = Join-Path $RootPath "Assemblies\System.Data.SQLite.dll"
-            if (Test-Path $assemblyPath) {
-                Add-Type -Path $assemblyPath -ErrorAction SilentlyContinue
-
-                $connectionString = "Data Source=$dbPath;Version=3;"
-                $connection = New-Object System.Data.SQLite.SQLiteConnection($connectionString)
-                $connection.Open()
-
-                $sql = @"
-INSERT INTO activity_log (action_type, app_id, app_name, group_id, group_name, user_id, user_name, intent, details, success, error_message, ip_address)
-VALUES (@ActionType, @AppId, @AppName, @GroupId, @GroupName, @UserId, @UserName, @Intent, @Details, @Success, @ErrorMessage, @IpAddress)
-"@
-
-                $command = $connection.CreateCommand()
-                $command.CommandText = $sql
-                $command.Parameters.AddWithValue("@ActionType", $ActionType) | Out-Null
-                $command.Parameters.AddWithValue("@AppId", [string]$AppId) | Out-Null
-                $command.Parameters.AddWithValue("@AppName", [string]$AppName) | Out-Null
-                $command.Parameters.AddWithValue("@GroupId", [string]$GroupId) | Out-Null
-                $command.Parameters.AddWithValue("@GroupName", [string]$GroupName) | Out-Null
-                $command.Parameters.AddWithValue("@UserId", [string]$UserId) | Out-Null
-                $command.Parameters.AddWithValue("@UserName", [string]$UserName) | Out-Null
-                $command.Parameters.AddWithValue("@Intent", [string]$Intent) | Out-Null
-                $command.Parameters.AddWithValue("@Details", [string]$Details) | Out-Null
-                $command.Parameters.AddWithValue("@Success", [int]$Success) | Out-Null
-                $command.Parameters.AddWithValue("@ErrorMessage", [string]$ErrorMessage) | Out-Null
-                $command.Parameters.AddWithValue("@IpAddress", [string]$IpAddress) | Out-Null
-
-                $command.ExecuteNonQuery() | Out-Null
-                $connection.Close()
-            }
-
-        } catch {
-            Write-Host "⚠ Failed to log activity: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    }
-
-    # Initialize activity log on server start
-    try {
-        $serverRootPath = $using:RootPath
-        Initialize-ActivityLogDB -RootPath $serverRootPath
-        Add-ActivityLog -RootPath $serverRootPath -ActionType "server_start" -Details '{"message": "PackageFactory server started"}' -Success $true
-    } catch {
-        Write-Host "⚠ Failed to initialize activity log: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 
     # Load additional API routes
