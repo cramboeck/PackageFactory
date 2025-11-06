@@ -1608,7 +1608,12 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 $fileDigest = $encryptionInfo.fileDigest
                 $fileDigestAlgorithm = $encryptionInfo.fileDigestAlgorithm
 
+                # Get unencrypted size from Detection.xml
+                $unencryptedSize = [int64]$detectionContent.ApplicationInfo.UnencryptedContentSize
+
                 Write-Host "  ✓ Encryption info extracted" -ForegroundColor Green
+                Write-Host "  → Unencrypted size: $([math]::Round($unencryptedSize/1MB, 2)) MB" -ForegroundColor Gray
+                Write-Host "  → Encrypted size: $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Gray
 
             } finally {
                 # Cleanup temp folder
@@ -1623,8 +1628,8 @@ Use the Detection.ps1 script included in the package or configure registry detec
             $fileBody = @{
                 "@odata.type" = "#microsoft.graph.mobileAppContentFile"
                 name = $intunewinFileName
-                size = $fileSize
-                sizeEncrypted = $fileSize
+                size = $unencryptedSize          # Original unencrypted size from Detection.xml
+                sizeEncrypted = $fileSize        # Actual .intunewin file size
                 manifest = $null
                 isDependency = $false
             } | ConvertTo-Json
