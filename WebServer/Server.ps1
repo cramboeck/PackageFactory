@@ -1376,15 +1376,28 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 return
             }
 
-            # Check if .intunewin file exists
-            $intunewinPath = Join-Path $packagePath "Intune\$packageName.intunewin"
-            if (-not (Test-Path $intunewinPath)) {
+            # Check if .intunewin file exists (search for any .intunewin file in Intune folder)
+            $intuneFolder = Join-Path $packagePath "Intune"
+            if (-not (Test-Path $intuneFolder)) {
                 Write-PodeJsonResponse -Value @{
                     success = $false
-                    error = "IntuneWin package not found. Please create the .intunewin package first."
+                    error = "Intune folder not found. Please create the .intunewin package first."
                 } -StatusCode 404
                 return
             }
+
+            $intunewinFiles = Get-ChildItem -Path $intuneFolder -Filter "*.intunewin" -ErrorAction SilentlyContinue
+            if ($intunewinFiles.Count -eq 0) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "No .intunewin file found in Intune folder. Please create the .intunewin package first."
+                } -StatusCode 404
+                return
+            }
+
+            # Use the first .intunewin file found
+            $intunewinPath = $intunewinFiles[0].FullName
+            $intunewinFileName = $intunewinFiles[0].Name
 
             # Load package metadata
             $metadataPath = Join-Path $packagePath "package-metadata.json"
@@ -1402,7 +1415,8 @@ Use the Detection.ps1 script included in the package or configure registry detec
             Write-Host "  - Name: $packageName" -ForegroundColor Gray
             Write-Host "  - Vendor: $($metadata.vendor)" -ForegroundColor Gray
             Write-Host "  - Version: $($metadata.version)" -ForegroundColor Gray
-            Write-Host "  - IntuneWin: $intunewinPath" -ForegroundColor Gray
+            Write-Host "  - IntuneWin File: $intunewinFileName" -ForegroundColor Gray
+            Write-Host "  - IntuneWin Path: $intunewinPath" -ForegroundColor Gray
 
             # Get OAuth token
             Write-Host "`nAuthenticating with Microsoft Graph..." -ForegroundColor Yellow
@@ -1437,7 +1451,7 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 displayName = $displayName
                 description = $description
                 publisher = $metadata.vendor
-                fileName = "$packageName.intunewin"
+                fileName = $intunewinFileName
                 installCommandLine = $metadata.installCommand
                 uninstallCommandLine = $metadata.uninstallCommand
                 installExperience = @{
