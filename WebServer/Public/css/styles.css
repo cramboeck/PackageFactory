@@ -1291,3 +1291,101 @@ body {
         font-size: 1em;
     }
 }
+
+/* Additional Dark Mode Fixes for Intune Dashboard */
+body[data-theme="dark"] .apps-table thead {
+    background: var(--light-bg);
+}
+
+body[data-theme="dark"] .apps-table tbody tr:hover {
+    background-color: var(--light-bg);
+}
+
+body[data-theme="dark"] .badge {
+    background: var(--primary-color);
+}
+
+body[data-theme="dark"] .table-container {
+    border-color: var(--border);
+}
+
+body[data-theme="dark"] .side-panel {
+    background: var(--bg-container);
+}
+
+body[data-theme="dark"] .assignment-list li {
+    background: var(--light-bg);
+}
+
+body[data-theme="dark"] .error-container {
+    background: rgba(220, 53, 69, 0.15);
+}
+
+/* Deployment Status */
+.status-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+    margin-top: 15px;
+}
+
+.status-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 15px;
+    border-radius: 8px;
+    background: var(--light-bg);
+    border-left: 4px solid;
+}
+
+.status-item.status-success {
+    border-left-color: var(--success-color);
+}
+
+.status-item.status-danger {
+    border-left-color: var(--danger-color);
+}
+
+.status-item.status-warning {
+    border-left-color: var(--warning-color);
+}
+
+.status-item.status-info {
+    border-left-color: #17a2b8;
+}
+
+.status-icon {
+    font-size: 1.5em;
+}
+
+.status-label {
+    flex: 1;
+    font-weight: 500;
+    color: var(--text-secondary);
+    font-size: 0.9em;
+}
+
+.status-count {
+    font-weight: 700;
+    font-size: 1.3em;
+    color: var(--text-primary);
+}
+
+/* Form Control (for select dropdowns in modal) */
+.form-control {
+    width: 100%;
+    padding: 10px 15px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 1em;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.1);
+}

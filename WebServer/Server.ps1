@@ -2223,4 +2223,201 @@ Use the Detection.ps1 script included in the package or configure registry detec
             } -StatusCode 500
         }
     }
+
+    # API: Get app install status (deployment status)
+    Add-PodeRoute -Method Get -Path '/api/intune/apps/:id/status' -ScriptBlock {
+        try {
+            $appId = $WebEvent.Parameters['id']
+
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "GET /api/intune/apps/$appId/status - Fetching install status" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            # Load config
+            $rootPath = $using:RootPath
+            $configPath = Join-Path $rootPath "Config\settings.json"
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            $tenantId = $config.IntuneIntegration.TenantId
+            $clientId = $config.IntuneIntegration.ClientId
+            $clientSecret = $config.IntuneIntegration.ClientSecret
+
+            # Get access token
+            $accessToken = Get-IntuneAccessToken -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            # Get device install status summary
+            $statusUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/deviceStatuses"
+            $statusResponse = Invoke-RestMethod -Method Get -Uri $statusUrl -Headers $headers -ErrorAction SilentlyContinue
+
+            $installStatusSummary = @{
+                installed = 0
+                failed = 0
+                notInstalled = 0
+                pending = 0
+            }
+
+            if ($statusResponse.value) {
+                foreach ($status in $statusResponse.value) {
+                    switch ($status.installState) {
+                        "installed" { $installStatusSummary.installed++ }
+                        "failed" { $installStatusSummary.failed++ }
+                        "notInstalled" { $installStatusSummary.notInstalled++ }
+                        "installing" { $installStatusSummary.pending++ }
+                        default { $installStatusSummary.pending++ }
+                    }
+                }
+            }
+
+            Write-Host "✓ Retrieved install status: $($statusResponse.value.Count) device(s)" -ForegroundColor Green
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                summary = $installStatusSummary
+                devices = $statusResponse.value | Select-Object -First 100 | ForEach-Object {
+                    @{
+                        deviceName = $_.deviceName
+                        userName = $_.userName
+                        installState = $_.installState
+                        lastSyncDateTime = $_.lastSyncDateTime
+                        errorCode = $_.errorCode
+                    }
+                }
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Error fetching install status: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to fetch install status: $errorMsg"
+            } -StatusCode 500
+        }
+    }
+
+    # API: Get Azure AD groups for assignments
+    Add-PodeRoute -Method Get -Path '/api/intune/groups' -ScriptBlock {
+        try {
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "GET /api/intune/groups - Fetching Azure AD groups" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            # Load config
+            $rootPath = $using:RootPath
+            $configPath = Join-Path $rootPath "Config\settings.json"
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            $tenantId = $config.IntuneIntegration.TenantId
+            $clientId = $config.IntuneIntegration.ClientId
+            $clientSecret = $config.IntuneIntegration.ClientSecret
+
+            # Get access token
+            $accessToken = Get-IntuneAccessToken -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            # Get groups
+            $graphUrl = "https://graph.microsoft.com/v1.0/groups?`$select=id,displayName,description&`$top=100&`$orderby=displayName"
+            $groupsResponse = Invoke-RestMethod -Method Get -Uri $graphUrl -Headers $headers -ErrorAction Stop
+
+            $groups = $groupsResponse.value
+
+            Write-Host "✓ Retrieved $($groups.Count) group(s)" -ForegroundColor Green
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                groups = $groups
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Error fetching groups: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to fetch groups: $errorMsg"
+            } -StatusCode 500
+        }
+    }
+
+    # API: Assign app to group
+    Add-PodeRoute -Method Post -Path '/api/intune/apps/:id/assign' -ScriptBlock {
+        try {
+            $appId = $WebEvent.Parameters['id']
+            $body = $WebEvent.Data
+
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "POST /api/intune/apps/$appId/assign - Creating assignment" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            $groupId = $body.groupId
+            $intent = $body.intent  # "required", "available", or "uninstall"
+
+            if ([string]::IsNullOrWhiteSpace($groupId) -or [string]::IsNullOrWhiteSpace($intent)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "groupId and intent are required"
+                } -StatusCode 400
+                return
+            }
+
+            # Load config
+            $rootPath = $using:RootPath
+            $configPath = Join-Path $rootPath "Config\settings.json"
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            $tenantId = $config.IntuneIntegration.TenantId
+            $clientId = $config.IntuneIntegration.ClientId
+            $clientSecret = $config.IntuneIntegration.ClientSecret
+
+            # Get access token
+            $accessToken = Get-IntuneAccessToken -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            # Create assignment
+            $assignmentBody = @{
+                mobileAppAssignments = @(
+                    @{
+                        "@odata.type" = "#microsoft.graph.mobileAppAssignment"
+                        intent = $intent
+                        target = @{
+                            "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                            groupId = $groupId
+                        }
+                    }
+                )
+            } | ConvertTo-Json -Depth 10
+
+            $assignUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assign"
+            $assignResponse = Invoke-RestMethod -Method Post -Uri $assignUrl -Headers $headers -Body $assignmentBody -ErrorAction Stop
+
+            Write-Host "✓ Assignment created successfully" -ForegroundColor Green
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                message = "App assigned successfully"
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Error creating assignment: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to create assignment: $errorMsg"
+            } -StatusCode 500
+        }
+    }
 }
