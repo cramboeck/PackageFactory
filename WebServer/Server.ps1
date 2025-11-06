@@ -1666,32 +1666,47 @@ Use the Detection.ps1 script included in the package or configure registry detec
             # Step 6: Upload file to Azure Storage
             Write-Host "  → Uploading file to Azure Storage..." -ForegroundColor Yellow
 
-            $chunkSize = 6MB # Azure requires max 4MB blocks for BlockBlob, but we use 6MB chunks
-            $fileBytes = [System.IO.File]::ReadAllBytes($intunewinPath)
+            $chunkSize = 6MB
             $totalChunks = [math]::Ceiling($fileSize / $chunkSize)
 
             Write-Host "  → Total chunks: $totalChunks" -ForegroundColor Gray
 
-            for ($i = 0; $i -lt $totalChunks; $i++) {
-                $chunkStart = $i * $chunkSize
-                $chunkEnd = [math]::Min($chunkStart + $chunkSize - 1, $fileSize - 1)
-                $chunkLength = $chunkEnd - $chunkStart + 1
+            # Open file stream for reading
+            $fileStream = [System.IO.File]::OpenRead($intunewinPath)
 
-                $chunkBytes = $fileBytes[$chunkStart..$chunkEnd]
+            try {
+                for ($i = 0; $i -lt $totalChunks; $i++) {
+                    $chunkStart = $i * $chunkSize
+                    $currentChunkSize = [math]::Min($chunkSize, $fileSize - $chunkStart)
 
-                # Azure Block Blob upload
-                $chunkHeaders = @{
-                    "x-ms-blob-type" = "BlockBlob"
-                    "Content-Length" = $chunkLength
+                    # Read chunk from stream
+                    $chunkBytes = New-Object byte[] $currentChunkSize
+                    $fileStream.Position = $chunkStart
+                    $bytesRead = $fileStream.Read($chunkBytes, 0, $currentChunkSize)
+
+                    if ($bytesRead -ne $currentChunkSize) {
+                        throw "Failed to read expected chunk size. Expected $currentChunkSize, got $bytesRead"
+                    }
+
+                    # Azure Block Blob upload
+                    $blockId = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($i.ToString('0000')))
+                    $uploadUrl = "$azureStorageUri&comp=block&blockid=$blockId"
+
+                    $chunkNum = $i + 1
+                    Write-Host "  ... uploading chunk $chunkNum/$totalChunks ($([math]::Round($currentChunkSize/1MB, 2)) MB)" -ForegroundColor DarkGray
+
+                    # Use Invoke-WebRequest for binary data (more reliable than Invoke-RestMethod)
+                    $response = Invoke-WebRequest -Method Put -Uri $uploadUrl -Body $chunkBytes -Headers @{
+                        "x-ms-blob-type" = "BlockBlob"
+                    } -UseBasicParsing -ErrorAction Stop
+
+                    if ($response.StatusCode -ne 201) {
+                        throw "Chunk upload failed with status $($response.StatusCode)"
+                    }
                 }
-
-                $chunkNum = $i + 1
-                Write-Host "  ... uploading chunk $chunkNum/$totalChunks ($([math]::Round($chunkLength/1MB, 2)) MB)" -ForegroundColor DarkGray
-
-                # Use Invoke-RestMethod to upload chunk
-                $uploadUrl = "$azureStorageUri&comp=block&blockid=$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($i.ToString('0000'))))"
-
-                Invoke-RestMethod -Method Put -Uri $uploadUrl -Headers $chunkHeaders -Body $chunkBytes -ErrorAction Stop | Out-Null
+            } finally {
+                $fileStream.Close()
+                $fileStream.Dispose()
             }
 
             # Commit blocks
