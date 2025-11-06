@@ -1496,6 +1496,7 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 description = $description
                 publisher = $metadata.vendor
                 fileName = $intunewinFileName
+                setupFilePath = "Invoke-AppDeployToolkit.ps1"
                 installCommandLine = $metadata.installCommand
                 uninstallCommandLine = $metadata.uninstallCommand
                 installExperience = @{
