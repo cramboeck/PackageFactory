@@ -1514,10 +1514,7 @@ Use the Detection.ps1 script included in the package or configure registry detec
                         "@odata.type" = "#microsoft.graph.win32LobAppRegistryDetection"
                         check32BitOn64System = $false
                         keyPath = $metadata.detectionKey -replace "^HKLM:\\", ""
-                        valueName = $null
                         detectionType = "exists"
-                        operator = "notConfigured"
-                        detectionValue = $null
                     }
                 )
                 returnCodes = @(
@@ -1531,8 +1528,33 @@ Use the Detection.ps1 script included in the package or configure registry detec
 
             $appJson = $appBody | ConvertTo-Json -Depth 10
 
+            # Debug: Log the JSON being sent
+            Write-Host "`nJSON Payload (first 500 chars):" -ForegroundColor Gray
+            Write-Host $appJson.Substring(0, [Math]::Min(500, $appJson.Length)) -ForegroundColor DarkGray
+
             $createAppUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps"
-            $appResponse = Invoke-RestMethod -Method Post -Uri $createAppUrl -Headers $headers -Body $appJson -ErrorAction Stop
+
+            try {
+                $appResponse = Invoke-RestMethod -Method Post -Uri $createAppUrl -Headers $headers -Body $appJson -ErrorAction Stop
+            } catch {
+                # Enhanced error logging for Graph API errors
+                Write-Host "✗ Graph API Error Details:" -ForegroundColor Red
+                Write-Host "  Status: $($_.Exception.Response.StatusCode.Value__)" -ForegroundColor Red
+
+                if ($_.ErrorDetails.Message) {
+                    Write-Host "  Error Message:" -ForegroundColor Red
+                    Write-Host $_.ErrorDetails.Message -ForegroundColor DarkRed
+
+                    try {
+                        $errorJson = $_.ErrorDetails.Message | ConvertFrom-Json
+                        if ($errorJson.error.message) {
+                            Write-Host "  Detailed Message: $($errorJson.error.message)" -ForegroundColor Red
+                        }
+                    } catch {}
+                }
+
+                throw
+            }
 
             $appId = $appResponse.id
 
@@ -1554,9 +1576,20 @@ Use the Detection.ps1 script included in the package or configure registry detec
             $errorMsg = $_.Exception.Message
             Write-Host "✗ Upload failed: $errorMsg" -ForegroundColor Red
 
+            # Try to extract detailed error message
+            $detailedError = $errorMsg
+            if ($_.ErrorDetails.Message) {
+                try {
+                    $errorJson = $_.ErrorDetails.Message | ConvertFrom-Json
+                    if ($errorJson.error.message) {
+                        $detailedError = $errorJson.error.message
+                    }
+                } catch {}
+            }
+
             Write-PodeJsonResponse -Value @{
                 success = $false
-                error = "Failed to upload to Intune: $errorMsg"
+                error = "Failed to upload to Intune: $detailedError"
             } -StatusCode 500
         }
     }
