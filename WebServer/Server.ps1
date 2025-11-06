@@ -1399,17 +1399,61 @@ Use the Detection.ps1 script included in the package or configure registry detec
             $intunewinPath = $intunewinFiles[0].FullName
             $intunewinFileName = $intunewinFiles[0].Name
 
-            # Load package metadata
+            # Load package metadata (with fallback for older packages)
             $metadataPath = Join-Path $packagePath "package-metadata.json"
-            if (-not (Test-Path $metadataPath)) {
-                Write-PodeJsonResponse -Value @{
-                    success = $false
-                    error = "Package metadata not found"
-                } -StatusCode 404
-                return
-            }
 
-            $metadata = Get-Content $metadataPath -Raw | ConvertFrom-Json
+            if (Test-Path $metadataPath) {
+                # Load from metadata file
+                $metadata = Get-Content $metadataPath -Raw | ConvertFrom-Json
+                Write-Host "✓ Loaded metadata from package-metadata.json" -ForegroundColor Green
+            } else {
+                # Fallback: Parse from package name and DEPLOYMENT-GUIDE.md
+                Write-Host "! Metadata file not found, creating from package structure..." -ForegroundColor Yellow
+
+                # Try to parse package name (format: Vendor_App_Version_Architecture)
+                $nameParts = $packageName -split '_'
+
+                # Read DEPLOYMENT-GUIDE.md to extract information
+                $guideFile = Join-Path $packagePath "Intune\DEPLOYMENT-GUIDE.md"
+                $guideContent = ""
+                if (Test-Path $guideFile) {
+                    $guideContent = Get-Content $guideFile -Raw
+                }
+
+                # Extract install/uninstall commands from guide
+                $installCmd = "powershell.exe -ExecutionPolicy Bypass -File `".\\Invoke-AppDeployToolkit.ps1`" -DeploymentType Install -DeployMode Silent"
+                $uninstallCmd = "powershell.exe -ExecutionPolicy Bypass -File `".\\Invoke-AppDeployToolkit.ps1`" -DeploymentType Uninstall -DeployMode Silent"
+
+                if ($guideContent -match 'Install Command[:\s]+```powershell\s*([^\n]+)') {
+                    $installCmd = $matches[1].Trim()
+                }
+                if ($guideContent -match 'Uninstall Command[:\s]+```powershell\s*([^\n]+)') {
+                    $uninstallCmd = $matches[1].Trim()
+                }
+
+                # Try to find registry detection key
+                $detectionKey = "HKLM:\SOFTWARE\MSP_IntuneAppInstall\Apps\$packageName"
+                if ($guideContent -match 'Registry Path[:\s]+```\s*([^\n]+)') {
+                    $detectionKey = $matches[1].Trim()
+                } elseif ($guideContent -match 'HKLM:\\\\SOFTWARE\\\\([^\s\n]+)') {
+                    $detectionKey = "HKLM:\SOFTWARE\" + $matches[1]
+                }
+
+                # Create metadata object
+                $metadata = [PSCustomObject]@{
+                    vendor = if ($nameParts.Count -gt 0) { $nameParts[0] } else { "Unknown Vendor" }
+                    appName = if ($nameParts.Count -gt 1) { $nameParts[1] } else { $packageName }
+                    version = if ($nameParts.Count -gt 2) { $nameParts[2] } else { "1.0" }
+                    architecture = if ($nameParts.Count -gt 3) { $nameParts[3] } else { "x64" }
+                    language = "en-US"
+                    installerType = "exe"
+                    installCommand = $installCmd
+                    uninstallCommand = $uninstallCmd
+                    detectionKey = $detectionKey
+                }
+
+                Write-Host "✓ Created metadata from package structure" -ForegroundColor Green
+            }
 
             Write-Host "✓ Package validated" -ForegroundColor Green
             Write-Host "  - Name: $packageName" -ForegroundColor Gray
