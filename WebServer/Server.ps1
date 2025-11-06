@@ -1792,7 +1792,16 @@ Use the Detection.ps1 script included in the package or configure registry detec
                     break
                 }
                 elseif ($currentState -like "*fail*" -or $currentState -like "*error*") {
-                    throw "File commit failed with state: $currentState"
+                    Write-Host "  ✗ File commit failed!" -ForegroundColor Red
+                    Write-Host "  → Full file status:" -ForegroundColor Red
+                    $fileStatus | ConvertTo-Json -Depth 5 | Write-Host -ForegroundColor DarkRed
+
+                    # Try to get more error details
+                    if ($fileStatus.uploadStateMessage) {
+                        Write-Host "  → Error Message: $($fileStatus.uploadStateMessage)" -ForegroundColor Red
+                    }
+
+                    throw "File commit failed with state: $currentState. See above for details."
                 }
             }
 
