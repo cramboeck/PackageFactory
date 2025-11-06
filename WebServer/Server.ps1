@@ -1739,7 +1739,6 @@ Use the Detection.ps1 script included in the package or configure registry detec
             $commitBody = @{
                 "@odata.type" = "#microsoft.graph.mobileAppContentFile"
                 fileEncryptionInfo = @{
-                    "@odata.type" = "#microsoft.graph.fileEncryptionInfo"
                     encryptionKey = $encryptionKey
                     macKey = $macKey
                     initializationVector = $initializationVector
