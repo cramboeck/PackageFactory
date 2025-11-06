@@ -1579,11 +1579,10 @@ Use the Detection.ps1 script included in the package or configure registry detec
             $fileSize = $fileInfo.Length
             Write-Host "  → .intunewin file size: $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Gray
 
-            # Calculate TOTAL size of the original package folder (all files)
-            # EXCLUDE the Intune subfolder to avoid counting the .intunewin file itself!
-            Write-Host "  → Calculating total package folder size (excluding Intune subfolder)..." -ForegroundColor Gray
+            # Calculate package folder size for reference (we'll use UnencryptedContentSize from Detection.xml instead)
+            Write-Host "  → Calculating package folder size (for reference)..." -ForegroundColor Gray
             $packageFolderSize = (Get-ChildItem -Path $packagePath -Recurse -File | Where-Object { $_.FullName -notlike "*\Intune\*" } | Measure-Object -Property Length -Sum).Sum
-            Write-Host "  → Total package folder size: $([math]::Round($packageFolderSize/1MB, 2)) MB" -ForegroundColor Gray
+            Write-Host "  → Package folder size: $([math]::Round($packageFolderSize/1MB, 2)) MB (excluding Intune subfolder)" -ForegroundColor Gray
 
             # Step 3: Extract encryption info from .intunewin file
             Write-Host "  → Extracting encryption info..." -ForegroundColor Gray
@@ -1643,13 +1642,13 @@ Use the Detection.ps1 script included in the package or configure registry detec
                     }
                 }
 
-                # Get unencrypted size from Detection.xml (for reference only - we use packageFolderSize instead)
+                # Get unencrypted size from Detection.xml (this is what Intune expects as 'size')
                 $unencryptedSize = [int64]$detectionContent.ApplicationInfo.UnencryptedContentSize
 
                 Write-Host "  ✓ Encryption info extracted" -ForegroundColor Green
-                Write-Host "  → Setup file size (Detection.xml): $([math]::Round($unencryptedSize/1MB, 2)) MB" -ForegroundColor DarkGray
-                Write-Host "  → USING Package folder size: $([math]::Round($packageFolderSize/1MB, 2)) MB" -ForegroundColor Cyan
-                Write-Host "  → USING Encrypted (.intunewin): $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Cyan
+                Write-Host "  → Package folder size (for reference): $([math]::Round($packageFolderSize/1MB, 2)) MB" -ForegroundColor DarkGray
+                Write-Host "  → USING size (UnencryptedContentSize): $([math]::Round($unencryptedSize/1MB, 2)) MB" -ForegroundColor Cyan
+                Write-Host "  → USING sizeEncrypted (.intunewin file): $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Cyan
 
             } finally {
                 # Cleanup temp folder
@@ -1664,7 +1663,7 @@ Use the Detection.ps1 script included in the package or configure registry detec
             $fileBody = @{
                 "@odata.type" = "#microsoft.graph.mobileAppContentFile"
                 name = $intunewinFileName
-                size = $packageFolderSize        # Total size of all files in package folder
+                size = $unencryptedSize          # UnencryptedContentSize from Detection.xml (as per Microsoft spec)
                 sizeEncrypted = $fileSize        # Actual .intunewin file size
                 manifest = $null
                 isDependency = $false
