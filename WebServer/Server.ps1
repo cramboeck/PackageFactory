@@ -1736,8 +1736,8 @@ Use the Detection.ps1 script included in the package or configure registry detec
             Write-Host "  → Encryption Key: $($encryptionKey.Substring(0, [Math]::Min(20, $encryptionKey.Length)))..." -ForegroundColor DarkGray
             Write-Host "  → Profile ID: $profileIdentifier" -ForegroundColor DarkGray
 
+            # Note: The /commit endpoint does NOT accept @odata.type - it will reject with validation error
             $commitBody = @{
-                "@odata.type" = "#microsoft.graph.mobileAppContentFile"
                 fileEncryptionInfo = @{
                     encryptionKey = $encryptionKey
                     macKey = $macKey
