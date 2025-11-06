@@ -35,11 +35,19 @@ To upload apps to Intune, you need an Azure AD App Registration with appropriate
 3. Select **Microsoft Graph**
 4. Choose **Application permissions** (not Delegated!)
 5. Add these permissions:
-   - `DeviceManagementApps.ReadWrite.All`
-   - `DeviceManagementConfiguration.ReadWrite.All`
-   - `Group.Read.All` (optional, for group assignments)
+
+   **Required for app upload and management:**
+   - `DeviceManagementApps.ReadWrite.All` - Upload and manage Intune apps
+   - `DeviceManagementConfiguration.ReadWrite.All` - Configure app settings
+
+   **Required for dashboard features (Phase 3):**
+   - `DeviceManagementManagedDevices.Read.All` - View device deployment status
+   - `Group.ReadWrite.All` - Create and assign deployment groups
+
 6. Click **Add permissions**
 7. **IMPORTANT:** Click **Grant admin consent** (requires Global Admin or Application Admin)
+
+**Note:** If you only see "Bad Request (400)" or "Forbidden (403)" errors in the dashboard, you likely need to add the Phase 3 permissions and grant admin consent.
 
 ### Step 3: Create Client Secret
 
@@ -165,6 +173,33 @@ Create a package as usual through PackageFactory UI
 - Ensure Tenant ID is correct
 - Required permission: `DeviceManagementApps.ReadWrite.All`
 
+### Dashboard: "Bad Request (400)" when viewing device status
+**Error:** `Response status code does not indicate success: 400 (Bad Request)`
+
+**Cause:** Missing permission to read managed devices
+
+**Solution:**
+1. Go to Azure Portal → App registrations → PackageFactory-Intune
+2. API permissions → Add permission → Microsoft Graph → Application permissions
+3. Add: `DeviceManagementManagedDevices.Read.All`
+4. Click **Grant admin consent**
+5. Refresh PackageFactory dashboard
+
+### Dashboard: "Forbidden (403)" when creating groups
+**Error:** `Response status code does not indicate success: 403 (Forbidden)`
+
+**Cause:** Insufficient permissions to create Entra ID groups
+
+**Solution:**
+1. Go to Azure Portal → App registrations → PackageFactory-Intune
+2. API permissions → Find `Group.Read.All` permission
+3. **Remove** `Group.Read.All` if present
+4. Add permission → Microsoft Graph → Application permissions
+5. Add: `Group.ReadWrite.All` (not just Read)
+6. Click **Grant admin consent**
+7. Wait 2-3 minutes for permissions to propagate
+8. Try creating groups again
+
 ### "Authentication failed"
 - Double-check all three values (Tenant ID, Client ID, Secret)
 - Verify Client Secret was copied correctly (no extra spaces)
@@ -193,22 +228,37 @@ This error was resolved in latest version. If you still see it:
 - Verify no proxy blocking graph.microsoft.com
 - Test with: `Test-NetConnection graph.microsoft.com -Port 443`
 
+### Permission Overview
+
+| Feature | Required Permission | Error if Missing |
+|---------|-------------------|------------------|
+| Upload apps | `DeviceManagementApps.ReadWrite.All` | 403 Forbidden |
+| View apps dashboard | `DeviceManagementApps.ReadWrite.All` | 403 Forbidden |
+| View device status | `DeviceManagementManagedDevices.Read.All` | 400 Bad Request |
+| Create groups | `Group.ReadWrite.All` | 403 Forbidden |
+| Assign apps to groups | `DeviceManagementApps.ReadWrite.All` | 403 Forbidden |
+
 ---
 
 ## What's Next?
 
-✅ **Currently Working:**
-- Complete automated upload to Intune
-- Automatic app creation with metadata
-- Detection rules and commands pre-configured
-- Support for large files (chunked upload)
+✅ **Phase 1-3 Complete:**
+- ✅ Complete automated upload to Intune
+- ✅ Automatic app creation with metadata
+- ✅ Detection rules and commands pre-configured
+- ✅ Support for large files (chunked upload)
+- ✅ **Intune Apps Dashboard** with search and filters
+- ✅ **Device Deployment Status** with detailed device list
+- ✅ **Auto-create Deployment Groups** (3 groups per app)
+- ✅ **Assignment Management** directly from dashboard
+- ✅ Dark theme support
 
-🚀 **Planned Features:**
-- **Intune Apps Dashboard**: View all apps in your Intune tenant
+🚀 **Phase 4 - Planned Features:**
 - **Supersedence Management**: Configure app relationships and upgrades
 - **Update Detection**: Automatically detect when new app versions are available
-- **Batch Operations**: Upload multiple packages at once
-- **Assignment Management**: Configure group assignments from PackageFactory
+- **Bulk Assignment**: Assign multiple apps to groups at once
+- **Deployment Reports**: Generate reports on deployment success rates
+- **App Dependencies**: Configure dependency relationships between apps
 
 ---
 
