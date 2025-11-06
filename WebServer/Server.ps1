@@ -1338,18 +1338,9 @@ Use the Detection.ps1 script included in the package or configure registry detec
         Write-PodeHtmlResponse -Value "<pre style='white-space: pre-wrap; word-wrap: break-word; padding: 20px; background: #1e1e1e; color: #d4d4d4; border-radius: 4px;'>$guideContent</pre>"
     }
 
-    # API: Test Intune Connection
+    # API: Test Intune Connection (using direct Graph API instead of IntuneWin32App module)
     Add-PodeRoute -Method Post -Path '/api/intune/test-connection' -ScriptBlock {
         try {
-            # Check if IntuneWin32App module is available
-            if (-not $using:IntuneModuleAvailable) {
-                Write-PodeJsonResponse -Value @{
-                    success = $false
-                    error = "IntuneWin32App module not installed. Please install with: Install-Module -Name IntuneWin32App -Scope CurrentUser"
-                } -StatusCode 500
-                return
-            }
-
             # Get credentials from request body
             $body = $WebEvent.Data
 
@@ -1373,106 +1364,82 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 return
             }
 
-            Write-Host "Attempting to connect to Microsoft Graph..." -ForegroundColor Yellow
+            Write-Host "Attempting to connect to Microsoft Graph API..." -ForegroundColor Yellow
             Write-Host "Tenant ID: $tenantId" -ForegroundColor Gray
             Write-Host "Client ID: $clientId" -ForegroundColor Gray
 
-            # Debug: Check client secret format
-            $secretLength = $clientSecret.Length
-            $secretStart = $clientSecret.Substring(0, [Math]::Min(4, $secretLength))
-            $secretEnd = if ($secretLength -gt 4) { $clientSecret.Substring($secretLength - 4) } else { "" }
-            Write-Host "Client Secret Length: $secretLength characters" -ForegroundColor Gray
-            Write-Host "Client Secret Format: $secretStart...$secretEnd" -ForegroundColor Gray
+            # Request OAuth token directly from Azure AD
+            try {
+                Write-Host "Requesting OAuth token from Azure AD..." -ForegroundColor Yellow
 
-            # Check for common issues
-            if ($clientSecret.Contains(" ")) {
-                Write-Host "WARNING: Client Secret contains spaces!" -ForegroundColor Yellow
-            }
-            if ($clientSecret.Length -lt 20) {
-                Write-Host "WARNING: Client Secret seems too short (< 20 chars)" -ForegroundColor Yellow
-            }
+                $tokenBody = @{
+                    client_id     = $clientId
+                    scope         = "https://graph.microsoft.com/.default"
+                    client_secret = $clientSecret
+                    grant_type    = "client_credentials"
+                }
 
-            # Check if it looks like a UUID (Secret ID instead of Value)
-            if ($clientSecret -match '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') {
-                Write-Host "WARNING: Client Secret appears to be a Secret ID (UUID format), not a Secret Value!" -ForegroundColor Red
+                $tokenUrl = "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token"
+                $tokenResponse = Invoke-RestMethod -Method Post -Uri $tokenUrl -Body $tokenBody -ContentType "application/x-www-form-urlencoded" -ErrorAction Stop
+
+                $accessToken = $tokenResponse.access_token
+                Write-Host "✓ Successfully obtained OAuth token" -ForegroundColor Green
+
+                # Test the token by querying Intune apps
+                Write-Host "Testing Intune API access..." -ForegroundColor Yellow
+
+                $headers = @{
+                    "Authorization" = "Bearer $accessToken"
+                    "Content-Type"  = "application/json"
+                }
+
+                $graphUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?`$top=1"
+                $appsResponse = Invoke-RestMethod -Method Get -Uri $graphUrl -Headers $headers -ErrorAction Stop
+
+                Write-Host "✓ Successfully connected to Microsoft Intune!" -ForegroundColor Green
+                Write-Host "Found $($appsResponse.'@odata.count') app(s) in Intune" -ForegroundColor Gray
+
                 Write-PodeJsonResponse -Value @{
-                    success = $false
-                    error = "The Client Secret appears to be a Secret ID (UUID format). You must use the Secret VALUE from Azure Portal. When creating a new secret, copy the 'Value' column (not 'Secret ID')."
-                } -StatusCode 400
+                    success = $true
+                    message = "Successfully connected to Microsoft Intune"
+                    tenantId = $tenantId
+                }
                 return
             }
-
-            # Convert client secret to secure string
-            $secureClientSecret = ConvertTo-SecureString $clientSecret -AsPlainText -Force
-
-            # Try to connect to Microsoft Graph
-            try {
-                # Capture warnings during connection attempt
-                $warningMessages = @()
-                $null = Connect-MSIntuneGraph -TenantId $tenantId -ClientId $clientId -ClientSecret $secureClientSecret -ErrorAction Stop -WarningVariable +warningMessages
-
-                # Check if authentication actually succeeded by testing API access
-                Write-Host "Testing Intune API access..." -ForegroundColor Yellow
-                try {
-                    $testApps = Get-IntuneWin32App -ErrorAction Stop | Select-Object -First 1
-                    Write-Host "Successfully authenticated and connected to Microsoft Intune!" -ForegroundColor Green
-
-                    Write-PodeJsonResponse -Value @{
-                        success = $true
-                        message = "Successfully connected to Microsoft Intune"
-                        tenantId = $tenantId
-                    }
-                    return
-                }
-                catch {
-                    # If we can't query apps, authentication likely failed
-                    $errorMsg = $_.Exception.Message
-
-                    # Check if it's an authentication token issue
-                    if ($errorMsg -like "*Authentication token*" -or $errorMsg -like "*not found*") {
-                        Write-Host "Authentication failed - invalid credentials" -ForegroundColor Red
-
-                        # Build detailed error message
-                        $detailedError = "Authentication failed. "
-                        if ($warningMessages.Count -gt 0) {
-                            $warningText = ($warningMessages | Out-String).Trim()
-                            if ($warningText -like "*Invalid client secret*") {
-                                $detailedError += "The Client Secret is invalid. In Azure Portal, you must use the SECRET VALUE (shown only once when created), not the Secret ID. Please create a new Client Secret and copy the value immediately."
-                            }
-                            elseif ($warningText -like "*AADSTS*") {
-                                $detailedError += "Azure AD error: $warningText"
-                            }
-                            else {
-                                $detailedError += $warningText
-                            }
-                        }
-                        else {
-                            $detailedError += "Verify Tenant ID, Client ID, and Client Secret are correct. Error: $errorMsg"
-                        }
-
-                        Write-PodeJsonResponse -Value @{
-                            success = $false
-                            error = $detailedError
-                        } -StatusCode 401
-                        return
-                    }
-                    else {
-                        # Different error - possibly permissions
-                        Write-Host "Failed to query Intune apps: $errorMsg" -ForegroundColor Red
-                        Write-PodeJsonResponse -Value @{
-                            success = $false
-                            error = "Connected to Graph API, but failed to query Intune apps. Check API permissions: DeviceManagementApps.ReadWrite.All must be granted and admin consented. Error: $errorMsg"
-                        } -StatusCode 403
-                        return
-                    }
-                }
-            }
             catch {
-                Write-Host "Failed to connect to Graph API: $($_.Exception.Message)" -ForegroundColor Red
-                Write-PodeJsonResponse -Value @{
-                    success = $false
-                    error = "Failed to authenticate with Microsoft Graph. Verify Tenant ID, Client ID, and Client Secret are correct. Error: $($_.Exception.Message)"
-                } -StatusCode 401
+                $errorMsg = $_.Exception.Message
+                Write-Host "✗ Connection failed: $errorMsg" -ForegroundColor Red
+
+                # Try to extract more details from the error
+                $detailedError = $errorMsg
+                if ($_.ErrorDetails.Message) {
+                    try {
+                        $errorJson = $_.ErrorDetails.Message | ConvertFrom-Json
+                        if ($errorJson.error_description) {
+                            $detailedError = $errorJson.error_description
+                        }
+                    } catch {}
+                }
+
+                # Determine if it's an auth error or permissions error
+                if ($errorMsg -like "*401*" -or $errorMsg -like "*unauthorized*" -or $errorMsg -like "*AADSTS*") {
+                    Write-PodeJsonResponse -Value @{
+                        success = $false
+                        error = "Authentication failed: $detailedError"
+                    } -StatusCode 401
+                }
+                elseif ($errorMsg -like "*403*" -or $errorMsg -like "*forbidden*" -or $errorMsg -like "*insufficient*") {
+                    Write-PodeJsonResponse -Value @{
+                        success = $false
+                        error = "Authentication succeeded, but insufficient permissions. Ensure 'DeviceManagementApps.ReadWrite.All' is granted and admin consent is provided. Error: $detailedError"
+                    } -StatusCode 403
+                }
+                else {
+                    Write-PodeJsonResponse -Value @{
+                        success = $false
+                        error = "Connection test failed: $detailedError"
+                    } -StatusCode 500
+                }
                 return
             }
         }
