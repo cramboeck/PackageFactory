@@ -1765,30 +1765,39 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 throw
             }
 
-            # Step 8: Wait for commit to complete
+            # Step 8: Wait for commit to complete (can take several minutes for large files)
             Write-Host "  → Waiting for commit to complete..." -ForegroundColor Gray
 
+            $commitMaxWaitTime = 180 # 3 minutes for large files (135MB)
             $elapsed = 0
             $commitSuccess = $false
 
-            while ($elapsed -lt $maxWaitTime) {
+            while ($elapsed -lt $commitMaxWaitTime) {
                 Start-Sleep -Seconds $waitInterval
                 $elapsed += $waitInterval
 
                 $fileStatusUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions/$contentVersionId/files/$fileId"
                 $fileStatus = Invoke-RestMethod -Method Get -Uri $fileStatusUrl -Headers $headers -ErrorAction Stop
 
-                if ($fileStatus.uploadState -eq "commitFileSuccess") {
-                    $commitSuccess = $true
-                    Write-Host "  ✓ Commit completed successfully" -ForegroundColor Green
-                    break
+                $currentState = $fileStatus.uploadState
+
+                # Log status every 10 seconds
+                if ($elapsed % 10 -eq 0) {
+                    Write-Host "  ... status: $currentState ($elapsed/$commitMaxWaitTime seconds)" -ForegroundColor DarkGray
                 }
 
-                Write-Host "  ... waiting for commit ($elapsed/$maxWaitTime seconds)" -ForegroundColor DarkGray
+                if ($currentState -eq "commitFileSuccess") {
+                    $commitSuccess = $true
+                    Write-Host "  ✓ Commit completed successfully!" -ForegroundColor Green
+                    break
+                }
+                elseif ($currentState -like "*fail*" -or $currentState -like "*error*") {
+                    throw "File commit failed with state: $currentState"
+                }
             }
 
             if (-not $commitSuccess) {
-                throw "Timeout waiting for file commit"
+                throw "Timeout waiting for file commit after $commitMaxWaitTime seconds. Last status: $currentState"
             }
 
             # Step 9: Update app with committed content version
