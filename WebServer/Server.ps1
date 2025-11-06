@@ -1563,14 +1563,226 @@ Use the Detection.ps1 script included in the package or configure registry detec
             Write-Host "  - App ID: $appId" -ForegroundColor Gray
             Write-Host "  - Display Name: $displayName" -ForegroundColor Gray
 
-            # Note: Full file upload implementation will be added in next phase
-            # For now, we've created the app shell - user needs to manually upload the .intunewin file
+            # PHASE 2: Upload .intunewin file content
+            Write-Host "`nPhase 2: Uploading .intunewin file content..." -ForegroundColor Yellow
+
+            # Step 1: Create ContentVersion
+            Write-Host "  → Creating content version..." -ForegroundColor Gray
+            $contentVersionUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions"
+            $contentVersionBody = @{} | ConvertTo-Json
+            $contentVersionResponse = Invoke-RestMethod -Method Post -Uri $contentVersionUrl -Headers $headers -Body $contentVersionBody -ErrorAction Stop
+            $contentVersionId = $contentVersionResponse.id
+            Write-Host "  ✓ Content version created: $contentVersionId" -ForegroundColor Green
+
+            # Step 2: Get file info
+            $fileInfo = Get-Item $intunewinPath
+            $fileSize = $fileInfo.Length
+            Write-Host "  → File size: $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Gray
+
+            # Step 3: Extract encryption info from .intunewin file
+            Write-Host "  → Extracting encryption info..." -ForegroundColor Gray
+
+            # .intunewin is a ZIP file - extract Detection.xml
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $tempExtractPath = Join-Path $env:TEMP "intunewin_extract_$(Get-Random)"
+
+            try {
+                [System.IO.Compression.ZipFile]::ExtractToDirectory($intunewinPath, $tempExtractPath)
+
+                # Find Detection.xml
+                $detectionXml = Get-ChildItem -Path $tempExtractPath -Filter "Detection.xml" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+
+                if (-not $detectionXml) {
+                    throw "Detection.xml not found in .intunewin package"
+                }
+
+                # Parse XML
+                [xml]$detectionContent = Get-Content $detectionXml.FullName
+                $encryptionInfo = $detectionContent.ApplicationInfo.EncryptionInfo
+
+                $encryptionKey = $encryptionInfo.EncryptionKey
+                $macKey = $encryptionInfo.macKey
+                $initializationVector = $encryptionInfo.initializationVector
+                $mac = $encryptionInfo.mac
+                $profileIdentifier = $detectionContent.ApplicationInfo.Name
+                $fileDigest = $encryptionInfo.fileDigest
+                $fileDigestAlgorithm = $encryptionInfo.fileDigestAlgorithm
+
+                Write-Host "  ✓ Encryption info extracted" -ForegroundColor Green
+
+            } finally {
+                # Cleanup temp folder
+                if (Test-Path $tempExtractPath) {
+                    Remove-Item $tempExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+
+            # Step 4: Create File entry in Intune
+            Write-Host "  → Creating file entry in Intune..." -ForegroundColor Gray
+
+            $fileBody = @{
+                "@odata.type" = "#microsoft.graph.mobileAppContentFile"
+                name = $intunewinFileName
+                size = $fileSize
+                sizeEncrypted = $fileSize
+                manifest = $null
+                isDependency = $false
+            } | ConvertTo-Json
+
+            $fileUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions/$contentVersionId/files"
+            $fileResponse = Invoke-RestMethod -Method Post -Uri $fileUrl -Headers $headers -Body $fileBody -ErrorAction Stop
+            $fileId = $fileResponse.id
+
+            Write-Host "  ✓ File entry created: $fileId" -ForegroundColor Green
+
+            # Step 5: Wait for Azure Storage URL
+            Write-Host "  → Waiting for Azure Storage upload URL..." -ForegroundColor Gray
+
+            $maxWaitTime = 60 # seconds
+            $waitInterval = 2 # seconds
+            $elapsed = 0
+            $azureStorageUri = $null
+
+            while ($elapsed -lt $maxWaitTime) {
+                Start-Sleep -Seconds $waitInterval
+                $elapsed += $waitInterval
+
+                $fileStatusUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions/$contentVersionId/files/$fileId"
+                $fileStatus = Invoke-RestMethod -Method Get -Uri $fileStatusUrl -Headers $headers -ErrorAction Stop
+
+                if ($fileStatus.uploadState -eq "azureStorageUriRequestSuccess") {
+                    $azureStorageUri = $fileStatus.azureStorageUri
+                    Write-Host "  ✓ Azure Storage URL received" -ForegroundColor Green
+                    break
+                }
+
+                Write-Host "  ... waiting ($elapsed/$maxWaitTime seconds)" -ForegroundColor DarkGray
+            }
+
+            if (-not $azureStorageUri) {
+                throw "Timeout waiting for Azure Storage URL"
+            }
+
+            # Step 6: Upload file to Azure Storage
+            Write-Host "  → Uploading file to Azure Storage..." -ForegroundColor Yellow
+
+            $chunkSize = 6MB # Azure requires max 4MB blocks for BlockBlob, but we use 6MB chunks
+            $fileBytes = [System.IO.File]::ReadAllBytes($intunewinPath)
+            $totalChunks = [math]::Ceiling($fileSize / $chunkSize)
+
+            Write-Host "  → Total chunks: $totalChunks" -ForegroundColor Gray
+
+            for ($i = 0; $i -lt $totalChunks; $i++) {
+                $chunkStart = $i * $chunkSize
+                $chunkEnd = [math]::Min($chunkStart + $chunkSize - 1, $fileSize - 1)
+                $chunkLength = $chunkEnd - $chunkStart + 1
+
+                $chunkBytes = $fileBytes[$chunkStart..$chunkEnd]
+
+                # Azure Block Blob upload
+                $chunkHeaders = @{
+                    "x-ms-blob-type" = "BlockBlob"
+                    "Content-Length" = $chunkLength
+                }
+
+                $chunkNum = $i + 1
+                Write-Host "  ... uploading chunk $chunkNum/$totalChunks ($([math]::Round($chunkLength/1MB, 2)) MB)" -ForegroundColor DarkGray
+
+                # Use Invoke-RestMethod to upload chunk
+                $uploadUrl = "$azureStorageUri&comp=block&blockid=$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($i.ToString('0000'))))"
+
+                Invoke-RestMethod -Method Put -Uri $uploadUrl -Headers $chunkHeaders -Body $chunkBytes -ErrorAction Stop | Out-Null
+            }
+
+            # Commit blocks
+            Write-Host "  → Committing blocks..." -ForegroundColor Gray
+
+            $blockListXml = '<?xml version="1.0" encoding="utf-8"?><BlockList>'
+            for ($i = 0; $i -lt $totalChunks; $i++) {
+                $blockId = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($i.ToString('0000')))
+                $blockListXml += "<Latest>$blockId</Latest>"
+            }
+            $blockListXml += '</BlockList>'
+
+            $commitUrl = "$azureStorageUri&comp=blocklist"
+            $commitHeaders = @{
+                "Content-Type" = "application/xml"
+                "x-ms-blob-content-type" = "application/octet-stream"
+            }
+
+            Invoke-RestMethod -Method Put -Uri $commitUrl -Headers $commitHeaders -Body $blockListXml -ErrorAction Stop | Out-Null
+
+            Write-Host "  ✓ File uploaded to Azure Storage" -ForegroundColor Green
+
+            # Step 7: Commit file in Intune
+            Write-Host "  → Committing file in Intune..." -ForegroundColor Gray
+
+            $commitBody = @{
+                "@odata.type" = "#microsoft.graph.mobileAppContentFile"
+                fileEncryptionInfo = @{
+                    encryptionKey = $encryptionKey
+                    macKey = $macKey
+                    initializationVector = $initializationVector
+                    mac = $mac
+                    profileIdentifier = $profileIdentifier
+                    fileDigest = $fileDigest
+                    fileDigestAlgorithm = $fileDigestAlgorithm
+                }
+            } | ConvertTo-Json -Depth 10
+
+            $commitFileUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions/$contentVersionId/files/$fileId/commit"
+            Invoke-RestMethod -Method Post -Uri $commitFileUrl -Headers $headers -Body $commitBody -ErrorAction Stop | Out-Null
+
+            Write-Host "  ✓ File committed" -ForegroundColor Green
+
+            # Step 8: Wait for commit to complete
+            Write-Host "  → Waiting for commit to complete..." -ForegroundColor Gray
+
+            $elapsed = 0
+            $commitSuccess = $false
+
+            while ($elapsed -lt $maxWaitTime) {
+                Start-Sleep -Seconds $waitInterval
+                $elapsed += $waitInterval
+
+                $fileStatusUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions/$contentVersionId/files/$fileId"
+                $fileStatus = Invoke-RestMethod -Method Get -Uri $fileStatusUrl -Headers $headers -ErrorAction Stop
+
+                if ($fileStatus.uploadState -eq "commitFileSuccess") {
+                    $commitSuccess = $true
+                    Write-Host "  ✓ Commit completed successfully" -ForegroundColor Green
+                    break
+                }
+
+                Write-Host "  ... waiting for commit ($elapsed/$maxWaitTime seconds)" -ForegroundColor DarkGray
+            }
+
+            if (-not $commitSuccess) {
+                throw "Timeout waiting for file commit"
+            }
+
+            # Step 9: Update app with committed content version
+            Write-Host "  → Finalizing app..." -ForegroundColor Gray
+
+            $updateBody = @{
+                "@odata.type" = "#microsoft.graph.win32LobApp"
+                committedContentVersion = $contentVersionId
+            } | ConvertTo-Json
+
+            $updateUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId"
+            Invoke-RestMethod -Method Patch -Uri $updateUrl -Headers $headers -Body $updateBody -ErrorAction Stop | Out-Null
+
+            Write-Host "`n✓✓✓ SUCCESS! App fully deployed to Intune! ✓✓✓" -ForegroundColor Green
+            Write-Host "  - App ID: $appId" -ForegroundColor Cyan
+            Write-Host "  - Display Name: $displayName" -ForegroundColor Cyan
+            Write-Host "  - Content Version: $contentVersionId" -ForegroundColor Cyan
 
             Write-PodeJsonResponse -Value @{
                 success = $true
                 appId = $appId
                 appName = $displayName
-                message = "Win32 app created successfully in Intune. Note: The .intunewin file needs to be uploaded manually through the Intune portal to complete the deployment."
+                contentVersionId = $contentVersionId
+                message = "Win32 app successfully created and fully deployed to Microsoft Intune! The app is ready for assignment."
             }
 
         } catch {
