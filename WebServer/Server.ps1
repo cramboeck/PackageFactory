@@ -1732,9 +1732,14 @@ Use the Detection.ps1 script included in the package or configure registry detec
             # Step 7: Commit file in Intune
             Write-Host "  → Committing file in Intune..." -ForegroundColor Gray
 
+            # Debug: Log encryption info
+            Write-Host "  → Encryption Key: $($encryptionKey.Substring(0, [Math]::Min(20, $encryptionKey.Length)))..." -ForegroundColor DarkGray
+            Write-Host "  → Profile ID: $profileIdentifier" -ForegroundColor DarkGray
+
             $commitBody = @{
                 "@odata.type" = "#microsoft.graph.mobileAppContentFile"
                 fileEncryptionInfo = @{
+                    "@odata.type" = "#microsoft.graph.fileEncryptionInfo"
                     encryptionKey = $encryptionKey
                     macKey = $macKey
                     initializationVector = $initializationVector
@@ -1745,10 +1750,21 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 }
             } | ConvertTo-Json -Depth 10
 
-            $commitFileUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions/$contentVersionId/files/$fileId/commit"
-            Invoke-RestMethod -Method Post -Uri $commitFileUrl -Headers $headers -Body $commitBody -ErrorAction Stop | Out-Null
+            Write-Host "  → Commit JSON (first 300 chars):" -ForegroundColor DarkGray
+            Write-Host $commitBody.Substring(0, [Math]::Min(300, $commitBody.Length)) -ForegroundColor DarkGray
 
-            Write-Host "  ✓ File committed" -ForegroundColor Green
+            $commitFileUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions/$contentVersionId/files/$fileId/commit"
+
+            try {
+                Invoke-RestMethod -Method Post -Uri $commitFileUrl -Headers $headers -Body $commitBody -ErrorAction Stop | Out-Null
+                Write-Host "  ✓ File committed" -ForegroundColor Green
+            } catch {
+                Write-Host "  ✗ Commit error details:" -ForegroundColor Red
+                if ($_.ErrorDetails.Message) {
+                    Write-Host $_.ErrorDetails.Message -ForegroundColor DarkRed
+                }
+                throw
+            }
 
             # Step 8: Wait for commit to complete
             Write-Host "  → Waiting for commit to complete..." -ForegroundColor Gray
