@@ -2428,24 +2428,55 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 "Content-Type"  = "application/json"
             }
 
-            # Create assignment
+            # IMPORTANT: The /assign endpoint REPLACES all assignments
+            # We need to fetch existing assignments first and add the new one to the list
+            Write-Host "Fetching existing assignments..." -ForegroundColor Yellow
+            $assignmentsUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assignments"
+            $existingAssignments = @()
+
+            try {
+                $assignmentsResponse = Invoke-RestMethod -Method Get -Uri $assignmentsUrl -Headers $headers -ErrorAction Stop
+                if ($assignmentsResponse.value) {
+                    Write-Host "Found $($assignmentsResponse.value.Count) existing assignment(s)" -ForegroundColor Yellow
+                    $existingAssignments = $assignmentsResponse.value
+                }
+            } catch {
+                Write-Host "No existing assignments found or error fetching them" -ForegroundColor Yellow
+            }
+
+            # Build the complete assignments array (existing + new)
+            $allAssignments = @()
+
+            # Add existing assignments
+            foreach ($existingAssignment in $existingAssignments) {
+                $allAssignments += @{
+                    "@odata.type" = "#microsoft.graph.mobileAppAssignment"
+                    intent = $existingAssignment.intent
+                    target = $existingAssignment.target
+                }
+            }
+
+            # Add new assignment
+            $allAssignments += @{
+                "@odata.type" = "#microsoft.graph.mobileAppAssignment"
+                intent = $intent
+                target = @{
+                    "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                    groupId = $groupId
+                }
+            }
+
+            Write-Host "Submitting $($allAssignments.Count) total assignment(s) (including new one)" -ForegroundColor Yellow
+
+            # Submit ALL assignments (this replaces the entire assignment list)
             $assignmentBody = @{
-                mobileAppAssignments = @(
-                    @{
-                        "@odata.type" = "#microsoft.graph.mobileAppAssignment"
-                        intent = $intent
-                        target = @{
-                            "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                            groupId = $groupId
-                        }
-                    }
-                )
+                mobileAppAssignments = $allAssignments
             } | ConvertTo-Json -Depth 10
 
             $assignUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assign"
             $assignResponse = Invoke-RestMethod -Method Post -Uri $assignUrl -Headers $headers -Body $assignmentBody -ErrorAction Stop
 
-            Write-Host "✓ Assignment created successfully" -ForegroundColor Green
+            Write-Host "✓ Assignment created successfully (total assignments: $($allAssignments.Count))" -ForegroundColor Green
 
             Write-PodeJsonResponse -Value @{
                 success = $true
@@ -2524,7 +2555,7 @@ Use the Detection.ps1 script included in the package or configure registry detec
             $createdGroups = @()
             $createdGroupIds = @()
 
-            # Create each group
+            # Create each group first (don't assign yet)
             foreach ($template in $groupTemplates) {
                 try {
                     $groupBody = @{
@@ -2552,36 +2583,68 @@ Use the Detection.ps1 script included in the package or configure registry detec
 
                     $createdGroupIds += $groupResponse.id
 
-                    # Auto-assign if requested
-                    if ($autoAssign -eq $true) {
-                        try {
-                            Write-Host "Auto-assigning group to app with intent: $($template.intent)" -ForegroundColor Yellow
+                } catch {
+                    Write-Host "✗ Failed to create group: $($template.name) - $($_.Exception.Message)" -ForegroundColor Red
+                }
+            }
 
-                            $assignmentBody = @{
-                                mobileAppAssignments = @(
-                                    @{
-                                        "@odata.type" = "#microsoft.graph.mobileAppAssignment"
-                                        intent = $template.intent
-                                        target = @{
-                                            "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
-                                            groupId = $groupResponse.id
-                                        }
-                                    }
-                                )
-                            } | ConvertTo-Json -Depth 10
+            # Auto-assign all groups at once if requested
+            if ($autoAssign -eq $true -and $createdGroups.Count -gt 0) {
+                try {
+                    Write-Host "Auto-assigning $($createdGroups.Count) group(s) to app..." -ForegroundColor Yellow
 
-                            $assignUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assign"
-                            Invoke-RestMethod -Method Post -Uri $assignUrl -Headers $headers -Body $assignmentBody -ErrorAction Stop
+                    # Get existing assignments first
+                    $assignmentsUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assignments"
+                    $existingAssignments = @()
 
-                            Write-Host "✓ Auto-assignment created successfully" -ForegroundColor Green
+                    try {
+                        $assignmentsResponse = Invoke-RestMethod -Method Get -Uri $assignmentsUrl -Headers $headers -ErrorAction Stop
+                        if ($assignmentsResponse.value) {
+                            Write-Host "Found $($assignmentsResponse.value.Count) existing assignment(s)" -ForegroundColor Yellow
+                            $existingAssignments = $assignmentsResponse.value
+                        }
+                    } catch {
+                        Write-Host "No existing assignments found" -ForegroundColor Yellow
+                    }
 
-                        } catch {
-                            Write-Host "⚠ Warning: Failed to auto-assign group: $($_.Exception.Message)" -ForegroundColor Yellow
+                    # Build complete assignments array (existing + new)
+                    $allAssignments = @()
+
+                    # Add existing assignments
+                    foreach ($existingAssignment in $existingAssignments) {
+                        $allAssignments += @{
+                            "@odata.type" = "#microsoft.graph.mobileAppAssignment"
+                            intent = $existingAssignment.intent
+                            target = $existingAssignment.target
                         }
                     }
 
+                    # Add new assignments for all created groups
+                    foreach ($createdGroup in $createdGroups) {
+                        $allAssignments += @{
+                            "@odata.type" = "#microsoft.graph.mobileAppAssignment"
+                            intent = $createdGroup.intent
+                            target = @{
+                                "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                                groupId = $createdGroup.id
+                            }
+                        }
+                    }
+
+                    Write-Host "Submitting $($allAssignments.Count) total assignment(s)" -ForegroundColor Yellow
+
+                    # Submit ALL assignments at once
+                    $assignmentBody = @{
+                        mobileAppAssignments = $allAssignments
+                    } | ConvertTo-Json -Depth 10
+
+                    $assignUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assign"
+                    Invoke-RestMethod -Method Post -Uri $assignUrl -Headers $headers -Body $assignmentBody -ErrorAction Stop
+
+                    Write-Host "✓ Auto-assigned all $($createdGroups.Count) group(s) successfully" -ForegroundColor Green
+
                 } catch {
-                    Write-Host "✗ Failed to create group: $($template.name) - $($_.Exception.Message)" -ForegroundColor Red
+                    Write-Host "⚠ Warning: Failed to auto-assign groups: $($_.Exception.Message)" -ForegroundColor Yellow
                 }
             }
 
