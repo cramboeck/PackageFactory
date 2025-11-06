@@ -1608,12 +1608,41 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 $fileDigest = $encryptionInfo.fileDigest
                 $fileDigestAlgorithm = $encryptionInfo.fileDigestAlgorithm
 
+                # DEBUG: Log ALL available size fields from Detection.xml
+                Write-Host "  → DEBUG: Detection.xml content:" -ForegroundColor Yellow
+                Write-Host "  → ApplicationInfo.Name: $($detectionContent.ApplicationInfo.Name)" -ForegroundColor DarkGray
+
+                # Try to find all possible size fields
+                $appInfo = $detectionContent.ApplicationInfo
+                if ($appInfo.UnencryptedContentSize) {
+                    Write-Host "  → UnencryptedContentSize: $($appInfo.UnencryptedContentSize)" -ForegroundColor DarkGray
+                }
+                if ($appInfo.Size) {
+                    Write-Host "  → Size: $($appInfo.Size)" -ForegroundColor DarkGray
+                }
+                if ($appInfo.FileSize) {
+                    Write-Host "  → FileSize: $($appInfo.FileSize)" -ForegroundColor DarkGray
+                }
+                if ($encryptionInfo.FileSize) {
+                    Write-Host "  → EncryptionInfo.FileSize: $($encryptionInfo.FileSize)" -ForegroundColor DarkGray
+                }
+
+                # Log the entire ApplicationInfo as JSON to see all fields
+                Write-Host "  → Full ApplicationInfo fields:" -ForegroundColor DarkGray
+                $appInfo | Get-Member -MemberType Property | ForEach-Object {
+                    $propName = $_.Name
+                    $propValue = $appInfo.$propName
+                    if ($propValue -and $propValue.ToString().Length -lt 100) {
+                        Write-Host "    - $propName = $propValue" -ForegroundColor DarkGray
+                    }
+                }
+
                 # Get unencrypted size from Detection.xml
                 $unencryptedSize = [int64]$detectionContent.ApplicationInfo.UnencryptedContentSize
 
                 Write-Host "  ✓ Encryption info extracted" -ForegroundColor Green
-                Write-Host "  → Unencrypted size: $([math]::Round($unencryptedSize/1MB, 2)) MB" -ForegroundColor Gray
-                Write-Host "  → Encrypted size: $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Gray
+                Write-Host "  → Using Unencrypted size: $([math]::Round($unencryptedSize/1MB, 2)) MB" -ForegroundColor Gray
+                Write-Host "  → Using Encrypted size: $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Gray
 
             } finally {
                 # Cleanup temp folder
