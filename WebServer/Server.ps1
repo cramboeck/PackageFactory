@@ -1324,6 +1324,185 @@ Use the Detection.ps1 script included in the package or configure registry detec
         Write-PodeHtmlResponse -Value "<pre>$guideContent</pre>"
     }
 
+    # API: Upload package to Microsoft Intune
+    Add-PodeRoute -Method Post -Path '/api/packages/:name/intune/upload' -ScriptBlock {
+        try {
+            $packageName = $WebEvent.Parameters['name']
+            $packagePath = Join-Path $using:OutputPath $packageName
+            $configPath = $using:ConfigPath
+
+            Write-Host "========================================" -ForegroundColor Cyan
+            Write-Host "Intune Upload Request: $packageName" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            # Check if package exists
+            if (-not (Test-Path $packagePath)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Package not found: $packageName"
+                } -StatusCode 404
+                return
+            }
+
+            # Load configuration for Intune credentials
+            if (-not (Test-Path $configPath)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Configuration file not found. Please configure Intune Integration in Settings."
+                } -StatusCode 500
+                return
+            }
+
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            if (-not $config.IntuneIntegration.Enabled) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Intune Integration is not enabled. Please enable it in Settings."
+                } -StatusCode 400
+                return
+            }
+
+            $tenantId = $config.IntuneIntegration.TenantId.Trim()
+            $clientId = $config.IntuneIntegration.ClientId.Trim()
+            $clientSecret = $config.IntuneIntegration.ClientSecret.Trim()
+
+            # Validate credentials
+            if ([string]::IsNullOrWhiteSpace($tenantId) -or [string]::IsNullOrWhiteSpace($clientId) -or [string]::IsNullOrWhiteSpace($clientSecret)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Intune credentials are incomplete. Please configure Tenant ID, Client ID, and Client Secret in Settings."
+                } -StatusCode 400
+                return
+            }
+
+            # Check if .intunewin file exists
+            $intunewinPath = Join-Path $packagePath "Intune\$packageName.intunewin"
+            if (-not (Test-Path $intunewinPath)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "IntuneWin package not found. Please create the .intunewin package first."
+                } -StatusCode 404
+                return
+            }
+
+            # Load package metadata
+            $metadataPath = Join-Path $packagePath "package-metadata.json"
+            if (-not (Test-Path $metadataPath)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Package metadata not found"
+                } -StatusCode 404
+                return
+            }
+
+            $metadata = Get-Content $metadataPath -Raw | ConvertFrom-Json
+
+            Write-Host "✓ Package validated" -ForegroundColor Green
+            Write-Host "  - Name: $packageName" -ForegroundColor Gray
+            Write-Host "  - Vendor: $($metadata.vendor)" -ForegroundColor Gray
+            Write-Host "  - Version: $($metadata.version)" -ForegroundColor Gray
+            Write-Host "  - IntuneWin: $intunewinPath" -ForegroundColor Gray
+
+            # Get OAuth token
+            Write-Host "`nAuthenticating with Microsoft Graph..." -ForegroundColor Yellow
+
+            $tokenBody = @{
+                client_id     = $clientId
+                scope         = "https://graph.microsoft.com/.default"
+                client_secret = $clientSecret
+                grant_type    = "client_credentials"
+            }
+
+            $tokenUrl = "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token"
+            $tokenResponse = Invoke-RestMethod -Method Post -Uri $tokenUrl -Body $tokenBody -ContentType "application/x-www-form-urlencoded" -ErrorAction Stop
+            $accessToken = $tokenResponse.access_token
+
+            Write-Host "✓ Authentication successful" -ForegroundColor Green
+
+            # Prepare headers for Graph API calls
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            # Create Win32 Mobile App
+            Write-Host "`nCreating Win32 app in Intune..." -ForegroundColor Yellow
+
+            $displayName = "$($metadata.vendor) $($metadata.appName) $($metadata.version)"
+            $description = "Deployed via PackageFactory`n`nVendor: $($metadata.vendor)`nApplication: $($metadata.appName)`nVersion: $($metadata.version)`nArchitecture: $($metadata.architecture)"
+
+            $appBody = @{
+                "@odata.type" = "#microsoft.graph.win32LobApp"
+                displayName = $displayName
+                description = $description
+                publisher = $metadata.vendor
+                fileName = "$packageName.intunewin"
+                installCommandLine = $metadata.installCommand
+                uninstallCommandLine = $metadata.uninstallCommand
+                installExperience = @{
+                    runAsAccount = "system"
+                    deviceRestartBehavior = "basedOnReturnCode"
+                }
+                applicability = @{
+                    minimumSupportedOperatingSystem = @{
+                        "@odata.type" = "#microsoft.graph.windows10MinimumOperatingSystem"
+                        v10_1809 = $true
+                    }
+                    architecture = if ($metadata.architecture -eq "x64") { "x64" } else { "x86" }
+                }
+                detectionRules = @(
+                    @{
+                        "@odata.type" = "#microsoft.graph.win32LobAppRegistryDetection"
+                        check32BitOn64System = $false
+                        keyPath = $metadata.detectionKey -replace "^HKLM:\\", ""
+                        valueName = $null
+                        detectionType = "exists"
+                        operator = "notConfigured"
+                        detectionValue = $null
+                    }
+                )
+                returnCodes = @(
+                    @{ returnCode = 0; type = "success" }
+                    @{ returnCode = 1707; type = "success" }
+                    @{ returnCode = 3010; type = "softReboot" }
+                    @{ returnCode = 1641; type = "hardReboot" }
+                    @{ returnCode = 1618; type = "retry" }
+                )
+            }
+
+            $appJson = $appBody | ConvertTo-Json -Depth 10
+
+            $createAppUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps"
+            $appResponse = Invoke-RestMethod -Method Post -Uri $createAppUrl -Headers $headers -Body $appJson -ErrorAction Stop
+
+            $appId = $appResponse.id
+
+            Write-Host "✓ Win32 app created successfully!" -ForegroundColor Green
+            Write-Host "  - App ID: $appId" -ForegroundColor Gray
+            Write-Host "  - Display Name: $displayName" -ForegroundColor Gray
+
+            # Note: Full file upload implementation will be added in next phase
+            # For now, we've created the app shell - user needs to manually upload the .intunewin file
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                appId = $appId
+                appName = $displayName
+                message = "Win32 app created successfully in Intune. Note: The .intunewin file needs to be uploaded manually through the Intune portal to complete the deployment."
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Upload failed: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to upload to Intune: $errorMsg"
+            } -StatusCode 500
+        }
+    }
+
     # API: Get Intune Setup Guide
     Add-PodeRoute -Method Get -Path '/api/intune/setup-guide' -ScriptBlock {
         $rootPath = $using:RootPath

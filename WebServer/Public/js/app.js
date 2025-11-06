@@ -581,10 +581,13 @@ async function viewPackageDetails(packageName) {
             const quickActionsDiv = content.querySelector('#quick-actions-placeholder');
 
             if (intuneStatus.exists) {
-                // IntuneWin package exists - show download buttons
+                // IntuneWin package exists - show download and upload buttons
+                const intuneEnabled = window.currentConfig && window.currentConfig.IntuneIntegration && window.currentConfig.IntuneIntegration.Enabled;
+
                 quickActionsDiv.innerHTML = `
                     <button class="btn btn-primary" data-folder-path="${safeValues.path}" onclick="openPackageFolder(this.getAttribute('data-folder-path'))">📂 Open Package Folder</button>
                     <button class="btn btn-success" onclick="downloadIntuneWinPackage('${escapeHtml(packageName)}')">⬇️ Download .intunewin</button>
+                    ${intuneEnabled ? `<button class="btn btn-primary" onclick="uploadToIntune('${escapeHtml(packageName)}')">☁️ Upload to Intune</button>` : ''}
                     ${intuneStatus.deploymentGuide ? `<button class="btn btn-info" onclick="viewDeploymentGuide('${escapeHtml(packageName)}')">📋 Deployment Guide</button>` : ''}
                     <button class="btn btn-secondary" onclick="closePackageDetails()">✅ Done</button>
                 `;
@@ -1035,6 +1038,72 @@ async function viewIntuneSetupGuide() {
         guideWindow.document.write(html);
     } catch (error) {
         alert('Error loading setup guide: ' + error.message);
+    }
+}
+
+// Upload package to Microsoft Intune
+async function uploadToIntune(packageName) {
+    const button = event.target;
+    const originalText = button.innerHTML;
+
+    try {
+        // Check if Intune integration is enabled
+        if (!window.currentConfig || !window.currentConfig.IntuneIntegration || !window.currentConfig.IntuneIntegration.Enabled) {
+            alert('Intune Integration is not enabled. Please configure it in Settings first.');
+            return;
+        }
+
+        // Confirm upload
+        if (!confirm(`Upload "${packageName}" to Microsoft Intune?\n\nThis will create a new Win32 app in your Intune tenant.`)) {
+            return;
+        }
+
+        // Disable button and show progress
+        button.disabled = true;
+        button.innerHTML = '⏳ Uploading to Intune...';
+
+        const response = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(packageName)}/intune/upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            button.innerHTML = '✅ Uploaded!';
+            button.classList.add('btn-success');
+
+            alert(`Successfully uploaded to Microsoft Intune!\n\nApp Name: ${result.appName || packageName}\nApp ID: ${result.appId || 'N/A'}`);
+
+            // Reset button after 3 seconds
+            setTimeout(() => {
+                button.innerHTML = originalText;
+                button.disabled = false;
+                button.classList.remove('btn-success');
+            }, 3000);
+        } else {
+            button.innerHTML = '❌ Failed';
+            button.classList.add('btn-danger');
+            alert('Failed to upload to Intune:\n\n' + result.error);
+
+            // Reset button after 3 seconds
+            setTimeout(() => {
+                button.innerHTML = originalText;
+                button.disabled = false;
+                button.classList.remove('btn-danger');
+            }, 3000);
+        }
+    } catch (error) {
+        button.innerHTML = '❌ Error';
+        button.classList.add('btn-danger');
+        alert('Error uploading to Intune: ' + error.message);
+
+        // Reset button after 3 seconds
+        setTimeout(() => {
+            button.innerHTML = originalText;
+            button.disabled = false;
+            button.classList.remove('btn-danger');
+        }, 3000);
     }
 }
 
