@@ -42,7 +42,8 @@ async function loadApps(forceRefresh = false) {
             throw new Error(data.error || 'Failed to load apps');
         }
 
-        allApps = data.apps || [];
+        // Ensure apps is always an array (handle PowerShell single-item serialization issue)
+        allApps = Array.isArray(data.apps) ? data.apps : (data.apps ? [data.apps] : []);
 
         // Hide loading
         loadingState.style.display = 'none';

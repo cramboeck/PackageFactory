@@ -2119,10 +2119,13 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 }
             }
 
+            # Ensure apps is always an array (PowerShell serializes single items as objects)
+            $appsArray = @($appsList)
+
             Write-PodeJsonResponse -Value @{
                 success = $true
-                apps = $appsList
-                count = $appsList.Count
+                apps = $appsArray
+                count = $appsArray.Count
                 timestamp = (Get-Date).ToString("o")
             }
 
