@@ -2012,4 +2012,202 @@ Use the Detection.ps1 script included in the package or configure registry detec
             return
         }
     }
+
+    # ==========================================
+    # INTUNE APPS DASHBOARD - Phase 3
+    # ==========================================
+
+    # Helper function to get Intune access token
+    function Get-IntuneAccessToken {
+        param(
+            [string]$TenantId,
+            [string]$ClientId,
+            [string]$ClientSecret
+        )
+
+        try {
+            $tokenBody = @{
+                client_id     = $ClientId
+                scope         = "https://graph.microsoft.com/.default"
+                client_secret = $ClientSecret
+                grant_type    = "client_credentials"
+            }
+
+            $tokenUrl = "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token"
+            $tokenResponse = Invoke-RestMethod -Method Post -Uri $tokenUrl -Body $tokenBody -ContentType "application/x-www-form-urlencoded" -ErrorAction Stop
+
+            return $tokenResponse.access_token
+        }
+        catch {
+            throw "Failed to obtain access token: $($_.Exception.Message)"
+        }
+    }
+
+    # API: Get all Intune apps
+    Add-PodeRoute -Method Get -Path '/api/intune/apps' -ScriptBlock {
+        try {
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "GET /api/intune/apps - Fetching Intune apps list" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            # Load config
+            $rootPath = $using:RootPath
+            $configPath = Join-Path $rootPath "Config\settings.json"
+
+            if (-not (Test-Path $configPath)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Configuration file not found. Please configure Intune integration in Settings."
+                } -StatusCode 400
+                return
+            }
+
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            if (-not $config.IntuneIntegration.Enabled) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Intune integration is not enabled. Please enable it in Settings."
+                } -StatusCode 400
+                return
+            }
+
+            $tenantId = $config.IntuneIntegration.TenantId
+            $clientId = $config.IntuneIntegration.ClientId
+            $clientSecret = $config.IntuneIntegration.ClientSecret
+
+            # Get access token
+            Write-Host "Authenticating with Microsoft Graph..." -ForegroundColor Yellow
+            $accessToken = Get-IntuneAccessToken -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+
+            # Fetch apps from Intune
+            Write-Host "Fetching Win32 apps from Intune..." -ForegroundColor Yellow
+
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            # Get Win32 LOB apps (filter by type)
+            $graphUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?`$filter=isof('microsoft.graph.win32LobApp')&`$orderby=displayName"
+            $appsResponse = Invoke-RestMethod -Method Get -Uri $graphUrl -Headers $headers -ErrorAction Stop
+
+            $apps = $appsResponse.value
+
+            # Handle pagination if there are many apps
+            while ($appsResponse.'@odata.nextLink') {
+                Write-Host "  → Fetching next page..." -ForegroundColor Gray
+                $appsResponse = Invoke-RestMethod -Method Get -Uri $appsResponse.'@odata.nextLink' -Headers $headers -ErrorAction Stop
+                $apps += $appsResponse.value
+            }
+
+            Write-Host "✓ Successfully retrieved $($apps.Count) app(s)" -ForegroundColor Green
+
+            # Transform data for frontend
+            $appsList = $apps | ForEach-Object {
+                @{
+                    id = $_.id
+                    displayName = $_.displayName
+                    publisher = $_.publisher
+                    description = $_.description
+                    createdDateTime = $_.createdDateTime
+                    lastModifiedDateTime = $_.lastModifiedDateTime
+                    fileName = $_.fileName
+                    size = $_.size
+                    committedContentVersion = $_.committedContentVersion
+                    notes = $_.notes
+                }
+            }
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                apps = $appsList
+                count = $appsList.Count
+                timestamp = (Get-Date).ToString("o")
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Error fetching Intune apps: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to fetch Intune apps: $errorMsg"
+            } -StatusCode 500
+        }
+    }
+
+    # API: Get specific app details
+    Add-PodeRoute -Method Get -Path '/api/intune/apps/:id' -ScriptBlock {
+        param($id)
+
+        try {
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "GET /api/intune/apps/$id - Fetching app details" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            # Load config
+            $rootPath = $using:RootPath
+            $configPath = Join-Path $rootPath "Config\settings.json"
+
+            if (-not (Test-Path $configPath)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Configuration file not found."
+                } -StatusCode 400
+                return
+            }
+
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            $tenantId = $config.IntuneIntegration.TenantId
+            $clientId = $config.IntuneIntegration.ClientId
+            $clientSecret = $config.IntuneIntegration.ClientSecret
+
+            # Get access token
+            $accessToken = Get-IntuneAccessToken -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+
+            # Fetch app details
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            $graphUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$id"
+            $app = Invoke-RestMethod -Method Get -Uri $graphUrl -Headers $headers -ErrorAction Stop
+
+            Write-Host "✓ Retrieved app: $($app.displayName)" -ForegroundColor Green
+
+            # Get assignments
+            Write-Host "Fetching assignments..." -ForegroundColor Yellow
+            $assignmentsUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$id/assignments"
+            $assignmentsResponse = Invoke-RestMethod -Method Get -Uri $assignmentsUrl -Headers $headers -ErrorAction SilentlyContinue
+
+            $assignments = @()
+            if ($assignmentsResponse.value) {
+                $assignments = $assignmentsResponse.value | ForEach-Object {
+                    @{
+                        id = $_.id
+                        intent = $_.intent
+                        targetGroupId = $_.target.groupId
+                    }
+                }
+            }
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                app = $app
+                assignments = $assignments
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Error fetching app details: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to fetch app details: $errorMsg"
+            } -StatusCode 500
+        }
+    }
 }
