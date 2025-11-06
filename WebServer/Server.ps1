@@ -2142,12 +2142,22 @@ Use the Detection.ps1 script included in the package or configure registry detec
 
     # API: Get specific app details
     Add-PodeRoute -Method Get -Path '/api/intune/apps/:id' -ScriptBlock {
-        param($id)
-
         try {
+            # Get app ID from route parameter
+            $appId = $WebEvent.Parameters['id']
+
             Write-Host "`n========================================" -ForegroundColor Cyan
-            Write-Host "GET /api/intune/apps/$id - Fetching app details" -ForegroundColor Cyan
+            Write-Host "GET /api/intune/apps/$appId - Fetching app details" -ForegroundColor Cyan
             Write-Host "========================================" -ForegroundColor Cyan
+
+            if ([string]::IsNullOrWhiteSpace($appId)) {
+                Write-Host "✗ No app ID provided" -ForegroundColor Red
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "No app ID provided"
+                } -StatusCode 400
+                return
+            }
 
             # Load config
             $rootPath = $using:RootPath
@@ -2176,14 +2186,14 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 "Content-Type"  = "application/json"
             }
 
-            $graphUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$id"
+            $graphUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId"
             $app = Invoke-RestMethod -Method Get -Uri $graphUrl -Headers $headers -ErrorAction Stop
 
             Write-Host "✓ Retrieved app: $($app.displayName)" -ForegroundColor Green
 
             # Get assignments
             Write-Host "Fetching assignments..." -ForegroundColor Yellow
-            $assignmentsUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$id/assignments"
+            $assignmentsUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assignments"
             $assignmentsResponse = Invoke-RestMethod -Method Get -Uri $assignmentsUrl -Headers $headers -ErrorAction SilentlyContinue
 
             $assignments = @()
