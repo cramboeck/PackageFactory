@@ -2250,9 +2250,22 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 "Content-Type"  = "application/json"
             }
 
-            # Get device install status summary
+            # Get device install status with pagination support
             $statusUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/deviceStatuses"
+            $allStatuses = @()
             $statusResponse = Invoke-RestMethod -Method Get -Uri $statusUrl -Headers $headers -ErrorAction SilentlyContinue
+
+            if ($statusResponse.value) {
+                $allStatuses += $statusResponse.value
+
+                # Handle pagination for large deployments
+                while ($statusResponse.'@odata.nextLink') {
+                    $statusResponse = Invoke-RestMethod -Method Get -Uri $statusResponse.'@odata.nextLink' -Headers $headers -ErrorAction SilentlyContinue
+                    if ($statusResponse.value) {
+                        $allStatuses += $statusResponse.value
+                    }
+                }
+            }
 
             $installStatusSummary = @{
                 installed = 0
@@ -2261,8 +2274,11 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 pending = 0
             }
 
-            if ($statusResponse.value) {
-                foreach ($status in $statusResponse.value) {
+            $deviceDetails = @()
+
+            if ($allStatuses.Count -gt 0) {
+                foreach ($status in $allStatuses) {
+                    # Count by status
                     switch ($status.installState) {
                         "installed" { $installStatusSummary.installed++ }
                         "failed" { $installStatusSummary.failed++ }
@@ -2270,23 +2286,49 @@ Use the Detection.ps1 script included in the package or configure registry detec
                         "installing" { $installStatusSummary.pending++ }
                         default { $installStatusSummary.pending++ }
                     }
+
+                    # Build detailed device info
+                    $deviceInfo = @{
+                        deviceName = $status.deviceName
+                        userName = $status.userName
+                        userPrincipalName = $status.userPrincipalName
+                        installState = $status.installState
+                        installStateDetail = $status.installStateDetail
+                        lastSyncDateTime = $status.lastSyncDateTime
+                        errorCode = $status.errorCode
+                        osVersion = $status.osVersion
+                        osDescription = $status.osDescription
+                        deviceId = $status.deviceId
+                    }
+
+                    # Add error details for failed installations
+                    if ($status.installState -eq "failed" -and $status.errorCode) {
+                        $errorCode = $status.errorCode
+                        # Common Intune error codes
+                        $errorMessage = switch ($errorCode) {
+                            "0x80070032" { "The request is not supported (File in use)" }
+                            "0x80070643" { "Installation failed (Generic MSI error)" }
+                            "0x87D1041C" { "Application failed to install (Intune specific)" }
+                            "0x87D1FDE8" { "App installation failed due to installation errors" }
+                            "0x80070005" { "Access denied" }
+                            "0x80070490" { "Element not found" }
+                            "0x8007000D" { "The data is invalid" }
+                            default { "Error code: $errorCode" }
+                        }
+                        $deviceInfo.errorMessage = $errorMessage
+                    }
+
+                    $deviceDetails += $deviceInfo
                 }
             }
 
-            Write-Host "✓ Retrieved install status: $($statusResponse.value.Count) device(s)" -ForegroundColor Green
+            Write-Host "✓ Retrieved install status: $($allStatuses.Count) device(s)" -ForegroundColor Green
 
             Write-PodeJsonResponse -Value @{
                 success = $true
                 summary = $installStatusSummary
-                devices = $statusResponse.value | Select-Object -First 100 | ForEach-Object {
-                    @{
-                        deviceName = $_.deviceName
-                        userName = $_.userName
-                        installState = $_.installState
-                        lastSyncDateTime = $_.lastSyncDateTime
-                        errorCode = $_.errorCode
-                    }
-                }
+                totalDevices = $allStatuses.Count
+                devices = $deviceDetails
             }
 
         } catch {
@@ -2417,6 +2459,156 @@ Use the Detection.ps1 script included in the package or configure registry detec
             Write-PodeJsonResponse -Value @{
                 success = $false
                 error = "Failed to create assignment: $errorMsg"
+            } -StatusCode 500
+        }
+    }
+
+    # API: Create deployment groups for an app
+    Add-PodeRoute -Method Post -Path '/api/intune/apps/:id/create-groups' -ScriptBlock {
+        try {
+            $appId = $WebEvent.Parameters['id']
+            $body = $WebEvent.Data
+
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "POST /api/intune/apps/$appId/create-groups - Creating deployment groups" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            $appName = $body.appName
+            $prefix = $body.prefix  # Optional prefix (e.g., "SCI ")
+            $autoAssign = $body.autoAssign  # true/false
+
+            if ([string]::IsNullOrWhiteSpace($appName)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "appName is required"
+                } -StatusCode 400
+                return
+            }
+
+            # Load config
+            $rootPath = $using:RootPath
+            $configPath = Join-Path $rootPath "Config\settings.json"
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            $tenantId = $config.IntuneIntegration.TenantId
+            $clientId = $config.IntuneIntegration.ClientId
+            $clientSecret = $config.IntuneIntegration.ClientSecret
+
+            # Get access token
+            $accessToken = Get-IntuneAccessToken -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            # Define group templates
+            $groupTemplates = @(
+                @{
+                    name = "$prefix$appName - Install (Required)"
+                    description = "Devices/Users in this group will have $appName automatically installed (Required deployment)"
+                    intent = "required"
+                },
+                @{
+                    name = "$prefix$appName - Available"
+                    description = "Devices/Users in this group can install $appName from Company Portal (Available deployment)"
+                    intent = "available"
+                },
+                @{
+                    name = "$prefix$appName - Uninstall"
+                    description = "Devices/Users in this group will have $appName uninstalled"
+                    intent = "uninstall"
+                }
+            )
+
+            $createdGroups = @()
+            $createdGroupIds = @()
+
+            # Create each group
+            foreach ($template in $groupTemplates) {
+                try {
+                    $groupBody = @{
+                        displayName = $template.name
+                        description = $template.description
+                        mailEnabled = $false
+                        mailNickname = ($template.name -replace '[^a-zA-Z0-9]', '').Substring(0, [Math]::Min(64, ($template.name -replace '[^a-zA-Z0-9]', '').Length))
+                        securityEnabled = $true
+                        groupTypes = @()
+                    } | ConvertTo-Json -Depth 10
+
+                    Write-Host "Creating group: $($template.name)" -ForegroundColor Yellow
+
+                    $createUrl = "https://graph.microsoft.com/v1.0/groups"
+                    $groupResponse = Invoke-RestMethod -Method Post -Uri $createUrl -Headers $headers -Body $groupBody -ErrorAction Stop
+
+                    Write-Host "✓ Group created: $($groupResponse.displayName) (ID: $($groupResponse.id))" -ForegroundColor Green
+
+                    $createdGroups += @{
+                        id = $groupResponse.id
+                        name = $groupResponse.displayName
+                        description = $groupResponse.description
+                        intent = $template.intent
+                    }
+
+                    $createdGroupIds += $groupResponse.id
+
+                    # Auto-assign if requested
+                    if ($autoAssign -eq $true) {
+                        try {
+                            Write-Host "Auto-assigning group to app with intent: $($template.intent)" -ForegroundColor Yellow
+
+                            $assignmentBody = @{
+                                mobileAppAssignments = @(
+                                    @{
+                                        "@odata.type" = "#microsoft.graph.mobileAppAssignment"
+                                        intent = $template.intent
+                                        target = @{
+                                            "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                                            groupId = $groupResponse.id
+                                        }
+                                    }
+                                )
+                            } | ConvertTo-Json -Depth 10
+
+                            $assignUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assign"
+                            Invoke-RestMethod -Method Post -Uri $assignUrl -Headers $headers -Body $assignmentBody -ErrorAction Stop
+
+                            Write-Host "✓ Auto-assignment created successfully" -ForegroundColor Green
+
+                        } catch {
+                            Write-Host "⚠ Warning: Failed to auto-assign group: $($_.Exception.Message)" -ForegroundColor Yellow
+                        }
+                    }
+
+                } catch {
+                    Write-Host "✗ Failed to create group: $($template.name) - $($_.Exception.Message)" -ForegroundColor Red
+                }
+            }
+
+            if ($createdGroups.Count -eq 0) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Failed to create any groups"
+                } -StatusCode 500
+                return
+            }
+
+            Write-Host "✓ Successfully created $($createdGroups.Count) group(s)" -ForegroundColor Green
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                message = "Created $($createdGroups.Count) deployment group(s)"
+                groups = $createdGroups
+                autoAssigned = $autoAssign
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Error creating deployment groups: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to create deployment groups: $errorMsg"
             } -StatusCode 500
         }
     }

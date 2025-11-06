@@ -1389,3 +1389,280 @@ body[data-theme="dark"] .error-container {
     border-color: var(--primary-color);
     box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.1);
 }
+
+/* ==========================================
+   ADVANCED FILTER CONTROLS
+   ========================================== */
+
+.filter-controls {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 20px;
+    padding: 20px;
+    background: var(--bg-container);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 200px;
+}
+
+.filter-group label {
+    font-size: 0.9em;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.filter-select {
+    padding: 10px 15px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 1em;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.filter-select:hover {
+    border-color: var(--primary-color);
+}
+
+.filter-select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.1);
+}
+
+.btn-sm {
+    padding: 10px 18px;
+    font-size: 0.9em;
+}
+
+/* ==========================================
+   DEVICE LIST TABLE
+   ========================================== */
+
+.device-list-table-container {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-container);
+}
+
+.device-list-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95em;
+}
+
+.device-list-table thead {
+    background: var(--light-bg);
+    border-bottom: 2px solid var(--border);
+}
+
+.device-list-table th {
+    padding: 12px 16px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-primary);
+}
+
+.device-list-table tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background-color 0.2s;
+}
+
+.device-list-table tbody tr:hover {
+    background-color: var(--light-bg);
+}
+
+.device-list-table tbody tr:last-child {
+    border-bottom: none;
+}
+
+.device-list-table td {
+    padding: 12px 16px;
+    color: var(--text-primary);
+    vertical-align: middle;
+}
+
+/* Device Row Status Colors */
+.device-row.device-status-installed {
+    border-left: 3px solid var(--success-color);
+}
+
+.device-row.device-status-failed {
+    border-left: 3px solid var(--danger-color);
+}
+
+.device-row.device-status-installing {
+    border-left: 3px solid var(--warning-color);
+}
+
+.device-row.device-status-notInstalled {
+    border-left: 3px solid #17a2b8;
+}
+
+/* Status Badge */
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 0.85em;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.status-badge.status-success {
+    background: rgba(40, 167, 69, 0.15);
+    color: var(--success-color);
+}
+
+.status-badge.status-danger {
+    background: rgba(220, 53, 69, 0.15);
+    color: var(--danger-color);
+}
+
+.status-badge.status-warning {
+    background: rgba(255, 193, 7, 0.15);
+    color: var(--warning-color);
+}
+
+.status-badge.status-info {
+    background: rgba(23, 162, 184, 0.15);
+    color: #17a2b8;
+}
+
+/* Error Details */
+.error-detail {
+    color: var(--danger-color);
+    font-size: 0.9em;
+    cursor: help;
+}
+
+/* ==========================================
+   GROUP CREATION MODAL
+   ========================================== */
+
+.group-preview {
+    background: var(--light-bg);
+    padding: 20px;
+    border-radius: 8px;
+    margin: 20px 0;
+    border: 1px solid var(--border);
+}
+
+.group-preview h4 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: var(--primary-color);
+    font-size: 1.1em;
+}
+
+.group-preview ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.group-preview li {
+    padding: 12px 15px;
+    margin-bottom: 10px;
+    background: var(--bg-container);
+    border-radius: 6px;
+    border-left: 4px solid var(--primary-color);
+    font-size: 0.95em;
+    line-height: 1.6;
+}
+
+.group-preview li:last-child {
+    margin-bottom: 0;
+}
+
+.group-preview li strong {
+    color: var(--primary-color);
+    font-weight: 600;
+    display: block;
+    margin-bottom: 4px;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.form-group small {
+    display: block;
+    margin-top: 5px;
+    color: var(--text-secondary);
+    font-size: 0.85em;
+}
+
+.form-group input[type="checkbox"] {
+    margin-right: 8px;
+    cursor: pointer;
+}
+
+.text-muted {
+    color: var(--text-secondary);
+}
+
+/* ==========================================
+   DARK MODE ADDITIONS
+   ========================================== */
+
+body[data-theme="dark"] .filter-controls {
+    background: var(--light-bg);
+}
+
+body[data-theme="dark"] .device-list-table thead {
+    background: var(--light-bg);
+}
+
+body[data-theme="dark"] .device-list-table tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+body[data-theme="dark"] .group-preview {
+    background: var(--light-bg);
+}
+
+body[data-theme="dark"] .group-preview li {
+    background: var(--bg-container);
+}
+
+body[data-theme="dark"] .status-badge.status-success {
+    background: rgba(40, 167, 69, 0.25);
+}
+
+body[data-theme="dark"] .status-badge.status-danger {
+    background: rgba(220, 53, 69, 0.25);
+}
+
+body[data-theme="dark"] .status-badge.status-warning {
+    background: rgba(255, 193, 7, 0.25);
+}
+
+body[data-theme="dark"] .status-badge.status-info {
+    background: rgba(23, 162, 184, 0.25);
+}

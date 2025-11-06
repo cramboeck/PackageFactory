@@ -70,6 +70,27 @@
                     </div>
                 </div>
 
+                <!-- Advanced Filters -->
+                <div class="filter-controls">
+                    <div class="filter-group">
+                        <label for="publisherFilter">Publisher</label>
+                        <select id="publisherFilter" class="filter-select">
+                            <option value="">All Publishers</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label for="assignmentFilter">Assignment Status</label>
+                        <select id="assignmentFilter" class="filter-select">
+                            <option value="">All Apps</option>
+                            <option value="assigned">Assigned</option>
+                            <option value="unassigned">Not Assigned</option>
+                        </select>
+                    </div>
+                    <button id="clearFiltersBtn" class="btn btn-secondary btn-sm" onclick="clearFilters()">
+                        🗑️ Clear Filters
+                    </button>
+                </div>
+
                 <!-- Apps Table -->
                 <div class="table-container">
                     <table class="apps-table">

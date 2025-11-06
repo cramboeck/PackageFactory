@@ -5,6 +5,12 @@
 const API_BASE = window.location.origin;
 let allApps = [];
 let currentApp = null;
+let currentFilters = {
+    search: '',
+    publisher: '',
+    assignment: ''
+};
+let deviceStatusData = null;
 
 // Theme Management
 function initTheme() {
@@ -47,7 +53,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Setup search
     document.getElementById('searchInput').addEventListener('input', function(e) {
-        filterApps(e.target.value);
+        currentFilters.search = e.target.value;
+        applyFilters();
+    });
+
+    // Setup filter dropdowns
+    document.getElementById('publisherFilter').addEventListener('change', function(e) {
+        currentFilters.publisher = e.target.value;
+        applyFilters();
+    });
+
+    document.getElementById('assignmentFilter').addEventListener('change', function(e) {
+        currentFilters.assignment = e.target.value;
+        applyFilters();
     });
 });
 
@@ -82,6 +100,7 @@ async function loadApps(forceRefresh = false) {
             emptyState.style.display = 'block';
         } else {
             appsContainer.style.display = 'block';
+            populatePublisherFilter();
             displayApps(allApps);
             updateAppCount(allApps.length);
             updateLastSync(data.timestamp);
@@ -126,19 +145,66 @@ function displayApps(apps) {
     });
 }
 
-// Filter apps by search query
-function filterApps(query) {
-    const filtered = allApps.filter(app => {
-        const searchStr = query.toLowerCase();
-        return (
+// Populate publisher filter dropdown
+function populatePublisherFilter() {
+    const publishers = [...new Set(allApps.map(app => app.publisher).filter(p => p))].sort();
+    const select = document.getElementById('publisherFilter');
+
+    // Keep current selection
+    const currentValue = select.value;
+
+    select.innerHTML = '<option value="">All Publishers</option>' +
+        publishers.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+
+    // Restore selection if still valid
+    if (currentValue && publishers.includes(currentValue)) {
+        select.value = currentValue;
+    }
+}
+
+// Apply all filters
+function applyFilters() {
+    let filtered = allApps;
+
+    // Search filter
+    if (currentFilters.search) {
+        const searchStr = currentFilters.search.toLowerCase();
+        filtered = filtered.filter(app =>
             app.displayName.toLowerCase().includes(searchStr) ||
             (app.publisher && app.publisher.toLowerCase().includes(searchStr)) ||
             (app.fileName && app.fileName.toLowerCase().includes(searchStr))
         );
-    });
+    }
+
+    // Publisher filter
+    if (currentFilters.publisher) {
+        filtered = filtered.filter(app => app.publisher === currentFilters.publisher);
+    }
+
+    // Assignment filter (requires assignment data to be loaded with apps)
+    if (currentFilters.assignment === 'assigned') {
+        filtered = filtered.filter(app => app.hasAssignments === true);
+    } else if (currentFilters.assignment === 'unassigned') {
+        filtered = filtered.filter(app => app.hasAssignments === false);
+    }
 
     displayApps(filtered);
     updateAppCount(filtered.length, allApps.length);
+}
+
+// Clear all filters
+function clearFilters() {
+    currentFilters = {
+        search: '',
+        publisher: '',
+        assignment: ''
+    };
+
+    document.getElementById('searchInput').value = '';
+    document.getElementById('publisherFilter').value = '';
+    document.getElementById('assignmentFilter').value = '';
+
+    applyFilters();
 }
 
 // View app details in side panel
@@ -166,6 +232,7 @@ async function viewAppDetails(appId) {
 
         currentApp = detailsData.app;
         const deploymentStatus = statusData.success ? statusData.summary : null;
+        deviceStatusData = statusData.success ? statusData.devices : null;
         renderAppDetails(detailsData.app, detailsData.assignments, deploymentStatus);
 
     } catch (error) {
@@ -211,6 +278,45 @@ function renderAppDetails(app, assignments, deploymentStatus) {
                             <span class="status-count">${deploymentStatus.notInstalled}</span>
                         </div>
                     </div>
+                    ${deviceStatusData && deviceStatusData.length > 0 ? `
+                        <div style="margin-top: 15px;">
+                            <button onclick="toggleDeviceList()" class="btn btn-secondary btn-sm" id="toggleDeviceListBtn">
+                                📋 Show Device Details (${deviceStatusData.length} devices)
+                            </button>
+                        </div>
+                        <div id="deviceListContainer" style="display: none; margin-top: 15px;">
+                            <div class="device-list-table-container">
+                                <table class="device-list-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Device</th>
+                                            <th>User</th>
+                                            <th>Status</th>
+                                            <th>Last Sync</th>
+                                            <th>Details</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${deviceStatusData.map(device => `
+                                            <tr class="device-row device-status-${device.installState}">
+                                                <td><strong>${escapeHtml(device.deviceName || 'Unknown')}</strong></td>
+                                                <td>${escapeHtml(device.userPrincipalName || device.userName || 'N/A')}</td>
+                                                <td>
+                                                    <span class="status-badge status-${getStatusClass(device.installState)}">
+                                                        ${getStatusIcon(device.installState)} ${device.installState}
+                                                    </span>
+                                                </td>
+                                                <td>${formatDate(device.lastSyncDateTime)}</td>
+                                                <td>
+                                                    ${device.errorMessage ? `<span class="error-detail" title="${escapeHtml(device.errorMessage)}">⚠️ ${escapeHtml(device.errorMessage.substring(0, 30))}${device.errorMessage.length > 30 ? '...' : ''}</span>` : '-'}
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    ` : ''}
                 ` : '<p>No deployment data available yet</p>'}
             </div>
         `;
@@ -256,9 +362,14 @@ function renderAppDetails(app, assignments, deploymentStatus) {
                     ${assignments.map(a => `<li><strong>${a.intent}</strong>: ${a.targetGroupId || 'All Users/Devices'}</li>`).join('')}
                 </ul>
             ` : ''}
-            <button onclick="showAssignmentModal('${app.id}')" class="btn btn-primary" style="margin-top: 15px;">
-                ➕ Assign to Group
-            </button>
+            <div style="display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap;">
+                <button onclick="showAssignmentModal('${app.id}')" class="btn btn-primary">
+                    ➕ Assign to Group
+                </button>
+                <button onclick="showCreateGroupsModal('${app.id}', '${escapeHtml(app.displayName)}')" class="btn btn-secondary">
+                    🏢 Create Deployment Groups
+                </button>
+            </div>
         </div>
 
         <div class="detail-section">
@@ -447,4 +558,168 @@ function escapeHtml(text) {
         "'": '&#039;'
     };
     return text.toString().replace(/[&<>"']/g, m => map[m]);
+}
+
+// Toggle device list visibility
+function toggleDeviceList() {
+    const container = document.getElementById('deviceListContainer');
+    const btn = document.getElementById('toggleDeviceListBtn');
+
+    if (container.style.display === 'none') {
+        container.style.display = 'block';
+        btn.textContent = `📋 Hide Device Details (${deviceStatusData.length} devices)`;
+    } else {
+        container.style.display = 'none';
+        btn.textContent = `📋 Show Device Details (${deviceStatusData.length} devices)`;
+    }
+}
+
+// Get status class for styling
+function getStatusClass(status) {
+    switch (status) {
+        case 'installed': return 'success';
+        case 'failed': return 'danger';
+        case 'installing': return 'warning';
+        case 'notInstalled': return 'info';
+        default: return 'info';
+    }
+}
+
+// Get status icon
+function getStatusIcon(status) {
+    switch (status) {
+        case 'installed': return '✅';
+        case 'failed': return '❌';
+        case 'installing': return '⏳';
+        case 'notInstalled': return '📭';
+        default: return '❓';
+    }
+}
+
+// Show create deployment groups modal
+function showCreateGroupsModal(appId, appName) {
+    const defaultPrefix = 'SCI ';
+
+    const modalHTML = `
+        <div class="modal" id="createGroupsModal" onclick="closeCreateGroupsModal(event)">
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <div class="modal-header">
+                    <h2>🏢 Create Deployment Groups</h2>
+                    <button onclick="closeCreateGroupsModal()" class="close-btn">✕</button>
+                </div>
+                <div class="modal-body">
+                    <p>This will create 3 Entra ID security groups for deploying <strong>${escapeHtml(appName)}</strong>:</p>
+
+                    <div class="form-group">
+                        <label for="groupPrefix">Group Name Prefix (optional)</label>
+                        <input type="text" id="groupPrefix" class="form-control" value="${defaultPrefix}" placeholder="e.g., SCI ">
+                        <small class="text-muted">Prefix to add before each group name</small>
+                    </div>
+
+                    <div class="group-preview">
+                        <h4>Preview:</h4>
+                        <ul id="groupPreviewList">
+                            <li><strong>${defaultPrefix}${appName} - Install (Required)</strong> - Auto-install deployment</li>
+                            <li><strong>${defaultPrefix}${appName} - Available</strong> - User optional deployment</li>
+                            <li><strong>${defaultPrefix}${appName} - Uninstall</strong> - Uninstall deployment</li>
+                        </ul>
+                    </div>
+
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="autoAssignCheck" checked>
+                            Automatically assign groups to this app after creation
+                        </label>
+                    </div>
+
+                    <div id="createGroupsStatus" style="display: none; margin-top: 20px;"></div>
+
+                    <div style="margin-top: 20px; display: flex; gap: 10px;">
+                        <button onclick="createDeploymentGroups('${appId}', '${escapeHtml(appName)}')" class="btn btn-primary">
+                            🏢 Create Groups
+                        </button>
+                        <button onclick="closeCreateGroupsModal()" class="btn btn-secondary">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+
+    // Live preview update
+    document.getElementById('groupPrefix').addEventListener('input', function(e) {
+        const prefix = e.target.value;
+        document.getElementById('groupPreviewList').innerHTML = `
+            <li><strong>${escapeHtml(prefix)}${escapeHtml(appName)} - Install (Required)</strong> - Auto-install deployment</li>
+            <li><strong>${escapeHtml(prefix)}${escapeHtml(appName)} - Available</strong> - User optional deployment</li>
+            <li><strong>${escapeHtml(prefix)}${escapeHtml(appName)} - Uninstall</strong> - Uninstall deployment</li>
+        `;
+    });
+}
+
+// Close create groups modal
+function closeCreateGroupsModal(event) {
+    if (!event || event.target.className === 'modal') {
+        const modal = document.getElementById('createGroupsModal');
+        if (modal) modal.remove();
+    }
+}
+
+// Create deployment groups
+async function createDeploymentGroups(appId, appName) {
+    const prefix = document.getElementById('groupPrefix').value || '';
+    const autoAssign = document.getElementById('autoAssignCheck').checked;
+    const statusDiv = document.getElementById('createGroupsStatus');
+
+    statusDiv.style.display = 'block';
+    statusDiv.innerHTML = '<div class="spinner"></div><p>Creating 3 deployment groups...</p>';
+
+    try {
+        const response = await fetch(`${API_BASE}/api/intune/apps/${appId}/create-groups`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                appName: appName,
+                prefix: prefix,
+                autoAssign: autoAssign
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            let successHTML = `
+                <div style="color: var(--success-color);">
+                    <h4>✅ Successfully created ${data.groups.length} group(s)!</h4>
+                    <ul style="margin-top: 10px;">
+            `;
+
+            data.groups.forEach(group => {
+                successHTML += `<li><strong>${escapeHtml(group.name)}</strong> (${group.intent})</li>`;
+            });
+
+            successHTML += '</ul>';
+
+            if (autoAssign) {
+                successHTML += '<p style="margin-top: 10px;">✅ Groups have been automatically assigned to the app.</p>';
+            }
+
+            successHTML += '</div>';
+
+            statusDiv.innerHTML = successHTML;
+
+            setTimeout(() => {
+                closeCreateGroupsModal();
+                // Refresh details panel
+                viewAppDetails(appId);
+            }, 3000);
+
+        } else {
+            throw new Error(data.error || 'Failed to create groups');
+        }
+    } catch (error) {
+        console.error('Error creating groups:', error);
+        statusDiv.innerHTML = `<p style="color: var(--danger-color);">❌ ${error.message}</p>`;
+    }
 }
