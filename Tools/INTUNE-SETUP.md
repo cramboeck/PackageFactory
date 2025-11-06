@@ -1,25 +1,18 @@
 # Intune Integration Setup Guide
 
-This guide helps you configure PackageFactory for direct integration with Microsoft Intune.
+This guide helps you configure PackageFactory for **complete automated integration** with Microsoft Intune.
 
----
+## ✨ Features
 
-## Prerequisites
+✅ **Phase 2 - Complete Automation** (Current)
+- ✅ Automatic .intunewin package creation
+- ✅ Direct upload to Microsoft Intune (no manual steps!)
+- ✅ Automatic app creation with full metadata
+- ✅ Detection rules, install/uninstall commands configured
+- ✅ Azure Storage chunked upload (supports large files)
+- ✅ Content versioning and commit
 
-### 1. Install IntuneWin32App PowerShell Module
-
-Open PowerShell as Administrator and run:
-
-```powershell
-Install-Module -Name IntuneWin32App -Force -Scope CurrentUser
-```
-
-**Verify installation:**
-```powershell
-Get-Module -ListAvailable IntuneWin32App
-```
-
-You should see the module listed with version information.
+**No PowerShell modules required** - uses Microsoft Graph API directly!
 
 ---
 
@@ -104,27 +97,47 @@ Edit `Config/settings.json` and add:
 
 ## Testing the Connection
 
-### Via UI:
-1. Settings → Intune Integration → **Test Connection** button
-2. Wait 2-3 seconds
-3. Should show: "✅ Connected successfully"
+### Via Web UI (Recommended):
+1. Open PackageFactory: `http://localhost:8080`
+2. Go to **Settings** → **Intune Integration**
+3. Click **Test Connection** button
+4. Wait 2-3 seconds
+5. Should show: "✅ Successfully connected to Microsoft Intune! Found X app(s)"
 
-### Via PowerShell:
-```powershell
-# Import module
-Import-Module IntuneWin32App
+This tests:
+- OAuth 2.0 authentication with Microsoft Graph
+- API permissions are correctly granted
+- Connection to Intune tenant is working
 
-# Connect
-$TenantId = "your-tenant-id"
-$ClientId = "your-client-id"
-$ClientSecret = ConvertTo-SecureString "your-secret" -AsPlainText -Force
-$Credential = New-Object System.Management.Automation.PSCredential($ClientId, $ClientSecret)
+---
 
-Connect-MSIntuneGraph -TenantId $TenantId -ClientSecret $Credential
+## How to Use
 
-# Test: Get first 5 apps
-Get-IntuneWin32App | Select-Object -First 5 displayName
-```
+### 1. Create Package
+Create a package as usual through PackageFactory UI
+
+### 2. Create .intunewin Package
+1. Go to **Package List**
+2. Find your package
+3. Click **Create IntuneWin** button
+4. Wait for completion (creates Invoke-AppDeployToolkit.intunewin in Intune subfolder)
+
+### 3. Upload to Intune
+1. Click **Upload to Intune** button (🔼 icon)
+2. PackageFactory will automatically:
+   - Extract encryption metadata from .intunewin
+   - Create Win32 app in Intune with full metadata
+   - Upload encrypted package to Azure Storage (chunked)
+   - Commit file and finalize app
+3. Wait ~30-60 seconds for large packages
+4. Success! App is now ready in Intune
+
+### 4. Verify in Intune Portal
+1. Go to https://intune.microsoft.com
+2. Navigate to **Apps** → **Windows** → **Windows Apps**
+3. Find your app (e.g., "SCI Google ChromeEnterprise 142.0.7444.603 x64")
+4. Status should be **Ready** (not "Your app is not ready yet")
+5. You can now assign it to groups!
 
 ---
 
@@ -146,37 +159,56 @@ Get-IntuneWin32App | Select-Object -First 5 displayName
 
 ## Troubleshooting
 
-### "Module not found"
-```powershell
-# Reinstall module
-Install-Module -Name IntuneWin32App -Force -AllowClobber
-```
-
 ### "Access Denied" / "Insufficient privileges"
 - Verify admin consent was granted for API permissions
 - Check if Client Secret is still valid (not expired)
 - Ensure Tenant ID is correct
+- Required permission: `DeviceManagementApps.ReadWrite.All`
 
 ### "Authentication failed"
 - Double-check all three values (Tenant ID, Client ID, Secret)
 - Verify Client Secret was copied correctly (no extra spaces)
 - Check if secret has expired in Azure Portal
+- Go to Settings → Test Connection to verify
+
+### "Package metadata not found"
+- Ensure package was created correctly with metadata.json
+- Check that package structure is valid
+- Try re-creating the package
+
+### "IntuneWinAppUtil.exe not found"
+- Tool is auto-downloaded on first use
+- Manual download: https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool
+- Place in: `Tools/IntuneWinAppUtil.exe`
+
+### "Upload failed: commitFileFailed"
+This error was resolved in latest version. If you still see it:
+- Ensure you're using latest PackageFactory version
+- Verify .intunewin file was created correctly
+- Check Azure Storage connectivity
+- Contact support with full error message
 
 ### "Could not connect to Microsoft Graph"
 - Check internet connection
-- Verify no proxy blocking Microsoft Graph API
-- Try manual PowerShell connection to isolate issue
+- Verify no proxy blocking graph.microsoft.com
+- Test with: `Test-NetConnection graph.microsoft.com -Port 443`
 
 ---
 
 ## What's Next?
 
-Once authentication works, you can:
+✅ **Currently Working:**
+- Complete automated upload to Intune
+- Automatic app creation with metadata
+- Detection rules and commands pre-configured
+- Support for large files (chunked upload)
 
-✅ Upload packages directly to Intune with one click
-✅ View all apps currently in your Intune tenant
-✅ Update existing apps with new versions
-✅ Configure assignments and deployment settings
+🚀 **Planned Features:**
+- **Intune Apps Dashboard**: View all apps in your Intune tenant
+- **Supersedence Management**: Configure app relationships and upgrades
+- **Update Detection**: Automatically detect when new app versions are available
+- **Batch Operations**: Upload multiple packages at once
+- **Assignment Management**: Configure group assignments from PackageFactory
 
 ---
 

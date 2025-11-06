@@ -21,9 +21,14 @@ PackageFactory is a comprehensive solution for MSPs and IT professionals to crea
 - **Template System** - Flexible and extensible template engine
 - **Docker Support** - Containerized deployment option
 
-### Integration
+### Microsoft Intune Integration ✨
+- **✅ Complete Automation** - One-click upload to Intune
+- **✅ .intunewin Creation** - Automatic package encryption
+- **✅ Graph API Integration** - Direct upload via Microsoft Graph
+- **✅ Chunked Upload** - Support for large files (135MB+)
+- **✅ Metadata Extraction** - Auto-configure detection rules
+- **✅ Content Versioning** - Proper commit and finalization
 - PSAppDeployToolkit 4.1.5 integration
-- Microsoft Intune ready packages
 - Autopilot deployment support
 - Detection script generation
 - Silent installation support (MSI/EXE)
