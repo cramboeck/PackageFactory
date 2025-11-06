@@ -1574,20 +1574,12 @@ Use the Detection.ps1 script included in the package or configure registry detec
             $contentVersionId = $contentVersionResponse.id
             Write-Host "  ✓ Content version created: $contentVersionId" -ForegroundColor Green
 
-            # Step 2: Get file info
-            $fileInfo = Get-Item $intunewinPath
-            $fileSize = $fileInfo.Length
-            Write-Host "  → .intunewin file size: $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Gray
+            # Step 2: Extract the inner encrypted file from .intunewin package
+            Write-Host "  → Extracting inner encrypted file from .intunewin..." -ForegroundColor Gray
 
-            # Calculate package folder size for reference (we'll use UnencryptedContentSize from Detection.xml instead)
-            Write-Host "  → Calculating package folder size (for reference)..." -ForegroundColor Gray
-            $packageFolderSize = (Get-ChildItem -Path $packagePath -Recurse -File | Where-Object { $_.FullName -notlike "*\Intune\*" } | Measure-Object -Property Length -Sum).Sum
-            Write-Host "  → Package folder size: $([math]::Round($packageFolderSize/1MB, 2)) MB (excluding Intune subfolder)" -ForegroundColor Gray
-
-            # Step 3: Extract encryption info from .intunewin file
-            Write-Host "  → Extracting encryption info..." -ForegroundColor Gray
-
-            # .intunewin is a ZIP file - extract Detection.xml
+            # .intunewin is a ZIP file containing:
+            # - Metadata/Detection.xml (encryption info)
+            # - Contents/IntunePackage.intunewin (the actual encrypted blob to upload)
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             $tempExtractPath = Join-Path $env:TEMP "intunewin_extract_$(Get-Random)"
 
@@ -1601,6 +1593,19 @@ Use the Detection.ps1 script included in the package or configure registry detec
                     throw "Detection.xml not found in .intunewin package"
                 }
 
+                # Find the inner IntunePackage.intunewin file (the encrypted blob)
+                $innerIntunewinFile = Get-ChildItem -Path $tempExtractPath -Filter "IntunePackage.intunewin" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+
+                if (-not $innerIntunewinFile) {
+                    throw "IntunePackage.intunewin not found in Contents folder"
+                }
+
+                # THIS is the file we need to upload!
+                $uploadFilePath = $innerIntunewinFile.FullName
+                $fileSize = $innerIntunewinFile.Length
+
+                Write-Host "  ✓ Found inner encrypted file: $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Green
+
                 # Parse XML
                 [xml]$detectionContent = Get-Content $detectionXml.FullName
                 $encryptionInfo = $detectionContent.ApplicationInfo.EncryptionInfo
@@ -1613,48 +1618,21 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 $fileDigest = $encryptionInfo.fileDigest
                 $fileDigestAlgorithm = $encryptionInfo.fileDigestAlgorithm
 
-                # DEBUG: Log ALL available size fields from Detection.xml
-                Write-Host "  → DEBUG: Detection.xml content:" -ForegroundColor Yellow
-                Write-Host "  → ApplicationInfo.Name: $($detectionContent.ApplicationInfo.Name)" -ForegroundColor DarkGray
-
-                # Try to find all possible size fields
-                $appInfo = $detectionContent.ApplicationInfo
-                if ($appInfo.UnencryptedContentSize) {
-                    Write-Host "  → UnencryptedContentSize: $($appInfo.UnencryptedContentSize)" -ForegroundColor DarkGray
-                }
-                if ($appInfo.Size) {
-                    Write-Host "  → Size: $($appInfo.Size)" -ForegroundColor DarkGray
-                }
-                if ($appInfo.FileSize) {
-                    Write-Host "  → FileSize: $($appInfo.FileSize)" -ForegroundColor DarkGray
-                }
-                if ($encryptionInfo.FileSize) {
-                    Write-Host "  → EncryptionInfo.FileSize: $($encryptionInfo.FileSize)" -ForegroundColor DarkGray
-                }
-
-                # Log the entire ApplicationInfo as JSON to see all fields
-                Write-Host "  → Full ApplicationInfo fields:" -ForegroundColor DarkGray
-                $appInfo | Get-Member -MemberType Property | ForEach-Object {
-                    $propName = $_.Name
-                    $propValue = $appInfo.$propName
-                    if ($propValue -and $propValue.ToString().Length -lt 100) {
-                        Write-Host "    - $propName = $propValue" -ForegroundColor DarkGray
-                    }
-                }
-
-                # Get unencrypted size from Detection.xml (this is what Intune expects as 'size')
+                # Get unencrypted size from Detection.xml
                 $unencryptedSize = [int64]$detectionContent.ApplicationInfo.UnencryptedContentSize
 
                 Write-Host "  ✓ Encryption info extracted" -ForegroundColor Green
-                Write-Host "  → Package folder size (for reference): $([math]::Round($packageFolderSize/1MB, 2)) MB" -ForegroundColor DarkGray
-                Write-Host "  → USING size (UnencryptedContentSize): $([math]::Round($unencryptedSize/1MB, 2)) MB" -ForegroundColor Cyan
-                Write-Host "  → USING sizeEncrypted (.intunewin file): $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Cyan
+                Write-Host "  → USING size (unencrypted): $([math]::Round($unencryptedSize/1MB, 2)) MB" -ForegroundColor Cyan
+                Write-Host "  → USING sizeEncrypted (inner encrypted file): $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Cyan
 
-            } finally {
-                # Cleanup temp folder
+                # NOTE: Don't cleanup temp folder yet - we need $uploadFilePath for the upload!
+
+            } catch {
+                # Cleanup on error
                 if (Test-Path $tempExtractPath) {
                     Remove-Item $tempExtractPath -Recurse -Force -ErrorAction SilentlyContinue
                 }
+                throw
             }
 
             # Step 4: Create File entry in Intune
@@ -1663,8 +1641,8 @@ Use the Detection.ps1 script included in the package or configure registry detec
             $fileBody = @{
                 "@odata.type" = "#microsoft.graph.mobileAppContentFile"
                 name = $intunewinFileName
-                size = $unencryptedSize          # UnencryptedContentSize from Detection.xml (as per Microsoft spec)
-                sizeEncrypted = $fileSize        # Actual .intunewin file size
+                size = $unencryptedSize          # UnencryptedContentSize from Detection.xml
+                sizeEncrypted = $fileSize        # Size of inner IntunePackage.intunewin (encrypted blob)
                 manifest = $null
                 isDependency = $false
             } | ConvertTo-Json
@@ -1703,16 +1681,16 @@ Use the Detection.ps1 script included in the package or configure registry detec
                 throw "Timeout waiting for Azure Storage URL"
             }
 
-            # Step 6: Upload file to Azure Storage
-            Write-Host "  → Uploading file to Azure Storage..." -ForegroundColor Yellow
+            # Step 6: Upload inner encrypted file to Azure Storage
+            Write-Host "  → Uploading encrypted file to Azure Storage..." -ForegroundColor Yellow
 
             $chunkSize = 6MB
             $totalChunks = [math]::Ceiling($fileSize / $chunkSize)
 
             Write-Host "  → Total chunks: $totalChunks" -ForegroundColor Gray
 
-            # Open file stream for reading
-            $fileStream = [System.IO.File]::OpenRead($intunewinPath)
+            # Open file stream for reading the INNER encrypted file
+            $fileStream = [System.IO.File]::OpenRead($uploadFilePath)
 
             try {
                 for ($i = 0; $i -lt $totalChunks; $i++) {
@@ -1865,6 +1843,11 @@ Use the Detection.ps1 script included in the package or configure registry detec
             Write-Host "  - Display Name: $displayName" -ForegroundColor Cyan
             Write-Host "  - Content Version: $contentVersionId" -ForegroundColor Cyan
 
+            # Cleanup temp extraction folder
+            if (Test-Path $tempExtractPath) {
+                Remove-Item $tempExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+
             Write-PodeJsonResponse -Value @{
                 success = $true
                 appId = $appId
@@ -1876,6 +1859,11 @@ Use the Detection.ps1 script included in the package or configure registry detec
         } catch {
             $errorMsg = $_.Exception.Message
             Write-Host "✗ Upload failed: $errorMsg" -ForegroundColor Red
+
+            # Cleanup temp extraction folder
+            if (Test-Path $tempExtractPath) {
+                Remove-Item $tempExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
 
             # Try to extract detailed error message
             $detailedError = $errorMsg
