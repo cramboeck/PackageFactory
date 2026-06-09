@@ -16,6 +16,41 @@ param(
 # Import Pode
 Import-Module Pode
 
+# Import PackageFactory module
+$packageFactoryModulePath = Join-Path (Split-Path -Parent $PSScriptRoot) "src\PackageFactory.psd1"
+if (Test-Path $packageFactoryModulePath) {
+    Import-Module $packageFactoryModulePath -Force
+    Write-Host "PackageFactory module loaded" -ForegroundColor Green
+} else {
+    Write-Warning "PackageFactory module not found at: $packageFactoryModulePath"
+}
+
+# Import IntuneWin32App module (for Intune integration)
+try {
+    Import-Module IntuneWin32App -ErrorAction Stop
+    Write-Host "IntuneWin32App module loaded" -ForegroundColor Green
+    $script:IntuneModuleAvailable = $true
+} catch {
+    Write-Warning "IntuneWin32App module not found. Intune integration features will be disabled."
+    Write-Host "Install with: Install-Module -Name IntuneWin32App -Scope CurrentUser" -ForegroundColor Yellow
+    $script:IntuneModuleAvailable = $false
+}
+
+# Dot-source required functions for Pode ScriptBlock access
+$getPackageFactoryRootPath = Join-Path (Split-Path -Parent $PSScriptRoot) "src\Private\Get-PackageFactoryRoot.ps1"
+if (Test-Path $getPackageFactoryRootPath) {
+    . $getPackageFactoryRootPath
+    Write-Host "Get-PackageFactoryRoot function loaded" -ForegroundColor Green
+}
+
+$intuneWinFunctionPath = Join-Path (Split-Path -Parent $PSScriptRoot) "src\Public\New-IntuneWinPackage.ps1"
+if (Test-Path $intuneWinFunctionPath) {
+    . $intuneWinFunctionPath
+    Write-Host "New-IntuneWinPackage function loaded" -ForegroundColor Green
+} else {
+    Write-Warning "New-IntuneWinPackage function not found at: $intuneWinFunctionPath"
+}
+
 # Global variables
 $script:RootPath = $RootPath
 $script:GeneratorPath = Join-Path $RootPath "Generator"
@@ -350,7 +385,7 @@ function New-Package {
         `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
         `$arguments = "$silentParams"
 
-        Start-ADTMsiProcess -Action Install -FilePath `$installerPath -Parameters `$arguments
+        Start-ADTMsiProcess -Action Install -FilePath `$installerPath -ArgumentList `$arguments
 "@
 
             # Uninstall command
@@ -359,7 +394,7 @@ function New-Package {
         `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
         `$arguments = "/qn /norestart"
 
-        Start-ADTMsiProcess -Action Uninstall -FilePath `$installerPath -Parameters `$arguments
+        Start-ADTMsiProcess -Action Uninstall -FilePath `$installerPath -ArgumentList `$arguments
 "@
         } else {
             $installerFile = if ($ExeFilename) { $ExeFilename } else { "setup.exe" }
@@ -519,11 +554,14 @@ powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -Depl
         if ($IncludePSADT) {
             Write-CMLog -Message "Including PSADT 4.1.7..." -Level Info -Component "CreatePackage" -LogPath $LogPath
             try {
-                $psadtSourcePath = Join-Path $RootPath "Generator\PSAppDeployToolkit"
+                # PSADT is stored in Generator/PSAppdeploytoolkit/PSAppDeployToolkit/
+                # (User uploads complete release package, we use the toolkit subfolder)
+                $psadtTemplatePath = Join-Path $RootPath "Generator\PSAppdeploytoolkit"
+                $psadtSourcePath = Join-Path $psadtTemplatePath "PSAppDeployToolkit"
 
                 # Check if source PSADT folder exists
                 if (-not (Test-Path $psadtSourcePath)) {
-                    throw "PSADT source folder not found: $psadtSourcePath. Please download PSADT 4.1.7 and extract to Generator\PSAppDeployToolkit\"
+                    throw "PSADT source folder not found: $psadtSourcePath. Please download PSADT 4.1.7 and extract to Generator\PSAppdeploytoolkit\"
                 }
 
                 # Check if PSADT module file exists
@@ -546,6 +584,17 @@ powershell.exe -ExecutionPolicy Bypass -File "Invoke-AppDeployToolkit.ps1" -Depl
                 if (Test-Path $invokeInPSADT) {
                     Remove-Item $invokeInPSADT -Force
                     Write-CMLog -Message "Removed original Invoke-AppDeployToolkit.ps1 from PSADT folder (using generated version)" -Level Info -Component "CreatePackage" -LogPath $LogPath
+                }
+
+                # Copy Invoke-AppDeployToolkit.exe from parent template folder
+                # This EXE is needed for Intune deployments and system context execution
+                $invokeExeSource = Join-Path $psadtTemplatePath "Invoke-AppDeployToolkit.exe"
+                if (Test-Path $invokeExeSource) {
+                    $invokeExeDest = Join-Path $packagePath "Invoke-AppDeployToolkit.exe"
+                    Copy-Item -Path $invokeExeSource -Destination $invokeExeDest -Force
+                    Write-CMLog -Message "Copied Invoke-AppDeployToolkit.exe to package root" -Level Info -Component "CreatePackage" -LogPath $LogPath
+                } else {
+                    Write-CMLog -Message "Invoke-AppDeployToolkit.exe not found at: $invokeExeSource" -Level Warning -Component "CreatePackage" -LogPath $LogPath
                 }
 
                 Write-CMLog -Message "PSADT installation completed successfully" -Level Info -Component "CreatePackage" -LogPath $LogPath
@@ -591,6 +640,126 @@ if (-not (Test-Path $script:OutputPath)) {
 }
 
 Write-Host "Output path: $script:OutputPath" -ForegroundColor Cyan
+
+# ==========================================
+# ACTIVITY LOG HELPER FUNCTIONS (Global Scope)
+# ==========================================
+
+# Helper function: Initialize activity log database
+function script:Initialize-ActivityLogDB {
+    param(
+        [string]$RootPath
+    )
+
+    $dbPath = Join-Path $RootPath "Data\activity-log.db"
+    $schemaPath = Join-Path $RootPath "Data\activity-log.sql"
+
+    # Create Data directory if it doesn't exist
+    $dataDir = Join-Path $RootPath "Data"
+    if (-not (Test-Path $dataDir)) {
+        New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+    }
+
+    # Create database if it doesn't exist
+    if (-not (Test-Path $dbPath)) {
+        Write-Host "Initializing activity log database..." -ForegroundColor Yellow
+
+        # Load SQLite assembly
+        $assemblyPath = Join-Path $RootPath "Assemblies\System.Data.SQLite.dll"
+        if (Test-Path $assemblyPath) {
+            Add-Type -Path $assemblyPath -ErrorAction SilentlyContinue
+
+            # Create database and execute schema
+            $connectionString = "Data Source=$dbPath;Version=3;"
+            $connection = New-Object System.Data.SQLite.SQLiteConnection($connectionString)
+            $connection.Open()
+
+            $schema = Get-Content $schemaPath -Raw
+            $command = $connection.CreateCommand()
+            $command.CommandText = $schema
+            $command.ExecuteNonQuery() | Out-Null
+
+            $connection.Close()
+
+            Write-Host "✓ Activity log database initialized" -ForegroundColor Green
+        } else {
+            Write-Host "⚠ SQLite assembly not found, activity logging disabled" -ForegroundColor Yellow
+        }
+    }
+
+    return $dbPath
+}
+
+# Helper function: Log activity
+function script:Add-ActivityLog {
+    param(
+        [string]$RootPath,
+        [string]$ActionType,
+        [string]$AppId = $null,
+        [string]$AppName = $null,
+        [string]$GroupId = $null,
+        [string]$GroupName = $null,
+        [string]$UserId = $null,
+        [string]$UserName = $null,
+        [string]$Intent = $null,
+        [string]$Details = $null,
+        [bool]$Success = $true,
+        [string]$ErrorMessage = $null,
+        [string]$IpAddress = $null
+    )
+
+    try {
+        $dbPath = Join-Path $RootPath "Data\activity-log.db"
+
+        if (-not (Test-Path $dbPath)) {
+            return
+        }
+
+        # Load SQLite assembly if not loaded
+        $assemblyPath = Join-Path $RootPath "Assemblies\System.Data.SQLite.dll"
+        if (Test-Path $assemblyPath) {
+            Add-Type -Path $assemblyPath -ErrorAction SilentlyContinue
+
+            $connectionString = "Data Source=$dbPath;Version=3;"
+            $connection = New-Object System.Data.SQLite.SQLiteConnection($connectionString)
+            $connection.Open()
+
+            $sql = @"
+INSERT INTO activity_log (action_type, app_id, app_name, group_id, group_name, user_id, user_name, intent, details, success, error_message, ip_address)
+VALUES (@ActionType, @AppId, @AppName, @GroupId, @GroupName, @UserId, @UserName, @Intent, @Details, @Success, @ErrorMessage, @IpAddress)
+"@
+
+            $command = $connection.CreateCommand()
+            $command.CommandText = $sql
+            $command.Parameters.AddWithValue("@ActionType", $ActionType) | Out-Null
+            $command.Parameters.AddWithValue("@AppId", [string]$AppId) | Out-Null
+            $command.Parameters.AddWithValue("@AppName", [string]$AppName) | Out-Null
+            $command.Parameters.AddWithValue("@GroupId", [string]$GroupId) | Out-Null
+            $command.Parameters.AddWithValue("@GroupName", [string]$GroupName) | Out-Null
+            $command.Parameters.AddWithValue("@UserId", [string]$UserId) | Out-Null
+            $command.Parameters.AddWithValue("@UserName", [string]$UserName) | Out-Null
+            $command.Parameters.AddWithValue("@Intent", [string]$Intent) | Out-Null
+            $command.Parameters.AddWithValue("@Details", [string]$Details) | Out-Null
+            $command.Parameters.AddWithValue("@Success", [int]$Success) | Out-Null
+            $command.Parameters.AddWithValue("@ErrorMessage", [string]$ErrorMessage) | Out-Null
+            $command.Parameters.AddWithValue("@IpAddress", [string]$IpAddress) | Out-Null
+
+            $command.ExecuteNonQuery() | Out-Null
+            $connection.Close()
+        }
+
+    } catch {
+        Write-Host "⚠ Failed to log activity: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# Initialize activity log on server start (BEFORE Pode starts)
+try {
+    Initialize-ActivityLogDB -RootPath $script:RootPath
+    Add-ActivityLog -RootPath $script:RootPath -ActionType "server_start" -Details '{"message": "PackageFactory server started"}' -Success $true
+} catch {
+    Write-Host "⚠ Failed to initialize activity log: $($_.Exception.Message)" -ForegroundColor Yellow
+}
 
 # Start Pode Server
 Start-PodeServer {
@@ -1070,5 +1239,1567 @@ Start-PodeServer {
         }
 
         Write-PodeJsonResponse -Value $templates
+    }
+
+    # API: Check IntuneWin status for a package
+    Add-PodeRoute -Method Get -Path '/api/packages/:name/intunewin/status' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+        $packagePath = Join-Path $using:OutputPath $packageName
+
+        if (-not (Test-Path $packagePath)) {
+            Write-PodeJsonResponse -Value @{
+                exists = $false
+                error = "Package not found"
+            } -StatusCode 404
+            return
+        }
+
+        $intuneFolder = Join-Path $packagePath "Intune"
+        $intunewinFile = $null
+        $deploymentGuide = $null
+
+        if (Test-Path $intuneFolder) {
+            $intunewinFile = Get-ChildItem -Path $intuneFolder -Filter "*.intunewin" | Select-Object -First 1
+            $guideFile = Join-Path $intuneFolder "DEPLOYMENT-GUIDE.md"
+            if (Test-Path $guideFile) {
+                $deploymentGuide = $guideFile
+            }
+        }
+
+        Write-PodeJsonResponse -Value @{
+            exists = ($null -ne $intunewinFile)
+            intunewinFile = if ($intunewinFile) { $intunewinFile.Name } else { $null }
+            deploymentGuide = ($null -ne $deploymentGuide)
+            intuneFolder = $intuneFolder
+        }
+    }
+
+    # API: Create IntuneWin package
+    Add-PodeRoute -Method Post -Path '/api/packages/:name/intunewin' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+        $packagePath = Join-Path $using:OutputPath $packageName
+
+        if (-not (Test-Path $packagePath)) {
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Package not found: $packageName"
+            } -StatusCode 404
+            return
+        }
+
+        try {
+            # Check if IntuneWinAppUtil.exe exists
+            $rootPath = $using:RootPath
+            $intuneWinAppUtilPath = Join-Path $rootPath "Tools\IntuneWinAppUtil.exe"
+
+            if (-not (Test-Path $intuneWinAppUtilPath)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "IntuneWinAppUtil.exe not found in Tools directory. Please download from https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool"
+                } -StatusCode 400
+                return
+            }
+
+            # Check if Invoke-AppDeployToolkit.exe exists
+            $setupFile = Join-Path $packagePath "Invoke-AppDeployToolkit.exe"
+            if (-not (Test-Path $setupFile)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Invoke-AppDeployToolkit.exe not found in package. Make sure PSADT is included."
+                } -StatusCode 400
+                return
+            }
+
+            # Create Intune output directory
+            $intuneOutputPath = Join-Path $packagePath "Intune"
+            if (-not (Test-Path $intuneOutputPath)) {
+                New-Item -Path $intuneOutputPath -ItemType Directory -Force | Out-Null
+            }
+
+            # Build IntuneWinAppUtil command
+            # Syntax: IntuneWinAppUtil.exe -c <source_folder> -s <setup_file> -o <output_folder> -q
+            $setupFileName = "Invoke-AppDeployToolkit.ps1"  # MUST match setupFilePath in app creation!
+            $arguments = @(
+                "-c", "`"$packagePath`""
+                "-s", "`"$setupFileName`""
+                "-o", "`"$intuneOutputPath`""
+                "-q"  # Quiet mode
+            )
+
+            # Execute IntuneWinAppUtil
+            $process = Start-Process -FilePath $intuneWinAppUtilPath `
+                -ArgumentList $arguments `
+                -Wait `
+                -PassThru `
+                -NoNewWindow `
+                -RedirectStandardOutput (Join-Path $env:TEMP "intunewin_stdout.txt") `
+                -RedirectStandardError (Join-Path $env:TEMP "intunewin_stderr.txt")
+
+            if ($process.ExitCode -ne 0) {
+                $stdout = Get-Content (Join-Path $env:TEMP "intunewin_stdout.txt") -Raw -ErrorAction SilentlyContinue
+                $stderr = Get-Content (Join-Path $env:TEMP "intunewin_stderr.txt") -Raw -ErrorAction SilentlyContinue
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "IntuneWinAppUtil failed with exit code $($process.ExitCode). STDOUT: $stdout STDERR: $stderr"
+                } -StatusCode 500
+                return
+            }
+
+            # Find generated .intunewin file
+            $intunewinFile = Get-ChildItem -Path $intuneOutputPath -Filter "*.intunewin" | Select-Object -First 1
+
+            if (-not $intunewinFile) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "No .intunewin file was created in: $intuneOutputPath"
+                } -StatusCode 500
+                return
+            }
+
+            # Generate deployment guide (simplified inline version)
+            $deploymentGuidePath = Join-Path $intuneOutputPath "DEPLOYMENT-GUIDE.md"
+            $deploymentGuide = @"
+# Intune Deployment Guide
+
+**Package:** $packageName
+**Generated:** $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+
+## Upload to Intune
+
+1. Navigate to **Microsoft Intune Admin Center** → **Apps** → **Windows**
+2. Click **+ Add** → Select **Windows app (Win32)**
+3. Upload the `.intunewin` file from this directory
+
+## Install/Uninstall Commands
+
+**Install Command:**
+``````
+Invoke-AppDeployToolkit.exe -DeploymentType Install
+``````
+
+**Uninstall Command:**
+``````
+Invoke-AppDeployToolkit.exe -DeploymentType Uninstall
+``````
+
+**Install Behavior:** System
+
+## Detection Rules
+
+Use the Detection.ps1 script included in the package or configure registry detection.
+
+---
+**Created with PackageFactory**
+"@
+            $deploymentGuide | Set-Content $deploymentGuidePath -Encoding UTF8
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                message = "IntuneWin package created successfully"
+                intunewinFile = $intunewinFile.Name
+                deploymentGuide = $true
+            }
+        }
+        catch {
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = $_.Exception.Message
+            } -StatusCode 500
+        }
+    }
+
+    # API: Download IntuneWin file
+    Add-PodeRoute -Method Get -Path '/api/packages/:name/intunewin/download' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+        $packagePath = Join-Path $using:OutputPath $packageName
+        $intuneFolder = Join-Path $packagePath "Intune"
+
+        if (-not (Test-Path $intuneFolder)) {
+            Write-PodeJsonResponse -Value @{ error = "Intune folder not found" } -StatusCode 404
+            return
+        }
+
+        $intunewinFile = Get-ChildItem -Path $intuneFolder -Filter "*.intunewin" | Select-Object -First 1
+
+        if (-not $intunewinFile) {
+            Write-PodeJsonResponse -Value @{ error = "IntuneWin file not found" } -StatusCode 404
+            return
+        }
+
+        Set-PodeResponseAttachment -Path $intunewinFile.FullName
+    }
+
+    # API: Get deployment guide
+    Add-PodeRoute -Method Get -Path '/api/packages/:name/intunewin/guide' -ScriptBlock {
+        $packageName = $WebEvent.Parameters['name']
+        $packagePath = Join-Path $using:OutputPath $packageName
+        $guideFile = Join-Path $packagePath "Intune\DEPLOYMENT-GUIDE.md"
+
+        if (-not (Test-Path $guideFile)) {
+            Write-PodeJsonResponse -Value @{ error = "Deployment guide not found" } -StatusCode 404
+            return
+        }
+
+        $guideContent = Get-Content $guideFile -Raw
+        Write-PodeHtmlResponse -Value "<pre>$guideContent</pre>"
+    }
+
+    # API: Upload package to Microsoft Intune
+    Add-PodeRoute -Method Post -Path '/api/packages/:name/intune/upload' -ScriptBlock {
+        try {
+            $packageName = $WebEvent.Parameters['name']
+            $packagePath = Join-Path $using:OutputPath $packageName
+            $configPath = $using:ConfigPath
+
+            Write-Host "========================================" -ForegroundColor Cyan
+            Write-Host "Intune Upload Request: $packageName" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            # Check if package exists
+            if (-not (Test-Path $packagePath)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Package not found: $packageName"
+                } -StatusCode 404
+                return
+            }
+
+            # Load configuration for Intune credentials
+            if (-not (Test-Path $configPath)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Configuration file not found. Please configure Intune Integration in Settings."
+                } -StatusCode 500
+                return
+            }
+
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            if (-not $config.IntuneIntegration.Enabled) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Intune Integration is not enabled. Please enable it in Settings."
+                } -StatusCode 400
+                return
+            }
+
+            $tenantId = $config.IntuneIntegration.TenantId.Trim()
+            $clientId = $config.IntuneIntegration.ClientId.Trim()
+            $clientSecret = $config.IntuneIntegration.ClientSecret.Trim()
+
+            # Validate credentials
+            if ([string]::IsNullOrWhiteSpace($tenantId) -or [string]::IsNullOrWhiteSpace($clientId) -or [string]::IsNullOrWhiteSpace($clientSecret)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Intune credentials are incomplete. Please configure Tenant ID, Client ID, and Client Secret in Settings."
+                } -StatusCode 400
+                return
+            }
+
+            # Check if .intunewin file exists (search for any .intunewin file in Intune folder)
+            $intuneFolder = Join-Path $packagePath "Intune"
+            if (-not (Test-Path $intuneFolder)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Intune folder not found. Please create the .intunewin package first."
+                } -StatusCode 404
+                return
+            }
+
+            $intunewinFiles = Get-ChildItem -Path $intuneFolder -Filter "*.intunewin" -ErrorAction SilentlyContinue
+            if ($intunewinFiles.Count -eq 0) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "No .intunewin file found in Intune folder. Please create the .intunewin package first."
+                } -StatusCode 404
+                return
+            }
+
+            # Use the first .intunewin file found
+            $intunewinPath = $intunewinFiles[0].FullName
+            $intunewinFileName = $intunewinFiles[0].Name
+
+            # Load package metadata (with fallback for older packages)
+            $metadataPath = Join-Path $packagePath "package-metadata.json"
+
+            if (Test-Path $metadataPath) {
+                # Load from metadata file
+                $metadata = Get-Content $metadataPath -Raw | ConvertFrom-Json
+                Write-Host "✓ Loaded metadata from package-metadata.json" -ForegroundColor Green
+            } else {
+                # Fallback: Parse from package name and DEPLOYMENT-GUIDE.md
+                Write-Host "! Metadata file not found, creating from package structure..." -ForegroundColor Yellow
+
+                # Try to parse package name (format: Vendor_App_Version_Architecture)
+                $nameParts = $packageName -split '_'
+
+                # Read DEPLOYMENT-GUIDE.md to extract information
+                $guideFile = Join-Path $packagePath "Intune\DEPLOYMENT-GUIDE.md"
+                $guideContent = ""
+                if (Test-Path $guideFile) {
+                    $guideContent = Get-Content $guideFile -Raw
+                }
+
+                # Extract install/uninstall commands from guide
+                $installCmd = "powershell.exe -ExecutionPolicy Bypass -File `".\\Invoke-AppDeployToolkit.ps1`" -DeploymentType Install -DeployMode Silent"
+                $uninstallCmd = "powershell.exe -ExecutionPolicy Bypass -File `".\\Invoke-AppDeployToolkit.ps1`" -DeploymentType Uninstall -DeployMode Silent"
+
+                if ($guideContent -match 'Install Command[:\s]+```powershell\s*([^\n]+)') {
+                    $installCmd = $matches[1].Trim()
+                }
+                if ($guideContent -match 'Uninstall Command[:\s]+```powershell\s*([^\n]+)') {
+                    $uninstallCmd = $matches[1].Trim()
+                }
+
+                # Try to find registry detection key
+                $detectionKey = "HKLM:\SOFTWARE\MSP_IntuneAppInstall\Apps\$packageName"
+                if ($guideContent -match 'Registry Path[:\s]+```\s*([^\n]+)') {
+                    $detectionKey = $matches[1].Trim()
+                } elseif ($guideContent -match 'HKLM:\\\\SOFTWARE\\\\([^\s\n]+)') {
+                    $detectionKey = "HKLM:\SOFTWARE\" + $matches[1]
+                }
+
+                # Create metadata object
+                $metadata = [PSCustomObject]@{
+                    vendor = if ($nameParts.Count -gt 0) { $nameParts[0] } else { "Unknown Vendor" }
+                    appName = if ($nameParts.Count -gt 1) { $nameParts[1] } else { $packageName }
+                    version = if ($nameParts.Count -gt 2) { $nameParts[2] } else { "1.0" }
+                    architecture = if ($nameParts.Count -gt 3) { $nameParts[3] } else { "x64" }
+                    language = "en-US"
+                    installerType = "exe"
+                    installCommand = $installCmd
+                    uninstallCommand = $uninstallCmd
+                    detectionKey = $detectionKey
+                }
+
+                Write-Host "✓ Created metadata from package structure" -ForegroundColor Green
+            }
+
+            Write-Host "✓ Package validated" -ForegroundColor Green
+            Write-Host "  - Name: $packageName" -ForegroundColor Gray
+            Write-Host "  - Vendor: $($metadata.vendor)" -ForegroundColor Gray
+            Write-Host "  - Version: $($metadata.version)" -ForegroundColor Gray
+            Write-Host "  - IntuneWin File: $intunewinFileName" -ForegroundColor Gray
+            Write-Host "  - IntuneWin Path: $intunewinPath" -ForegroundColor Gray
+
+            # Get OAuth token
+            Write-Host "`nAuthenticating with Microsoft Graph..." -ForegroundColor Yellow
+
+            $tokenBody = @{
+                client_id     = $clientId
+                scope         = "https://graph.microsoft.com/.default"
+                client_secret = $clientSecret
+                grant_type    = "client_credentials"
+            }
+
+            $tokenUrl = "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token"
+            $tokenResponse = Invoke-RestMethod -Method Post -Uri $tokenUrl -Body $tokenBody -ContentType "application/x-www-form-urlencoded" -ErrorAction Stop
+            $accessToken = $tokenResponse.access_token
+
+            Write-Host "✓ Authentication successful" -ForegroundColor Green
+
+            # Prepare headers for Graph API calls
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            # Create Win32 Mobile App
+            Write-Host "`nCreating Win32 app in Intune..." -ForegroundColor Yellow
+
+            $displayName = "$($metadata.vendor) $($metadata.appName) $($metadata.version)"
+            $description = "Deployed via PackageFactory`n`nVendor: $($metadata.vendor)`nApplication: $($metadata.appName)`nVersion: $($metadata.version)`nArchitecture: $($metadata.architecture)"
+
+            $appBody = @{
+                "@odata.type" = "#microsoft.graph.win32LobApp"
+                displayName = $displayName
+                description = $description
+                publisher = $metadata.vendor
+                fileName = $intunewinFileName
+                setupFilePath = "Invoke-AppDeployToolkit.ps1"
+                installCommandLine = $metadata.installCommand
+                uninstallCommandLine = $metadata.uninstallCommand
+                installExperience = @{
+                    runAsAccount = "system"
+                    deviceRestartBehavior = "basedOnReturnCode"
+                }
+                applicability = @{
+                    minimumSupportedOperatingSystem = @{
+                        "@odata.type" = "#microsoft.graph.windows10MinimumOperatingSystem"
+                        v10_1809 = $true
+                    }
+                    architecture = if ($metadata.architecture -eq "x64") { "x64" } else { "x86" }
+                }
+                detectionRules = @(
+                    @{
+                        "@odata.type" = "#microsoft.graph.win32LobAppRegistryDetection"
+                        check32BitOn64System = $false
+                        keyPath = $metadata.detectionKey -replace "^HKLM:\\", ""
+                        detectionType = "exists"
+                    }
+                )
+                returnCodes = @(
+                    @{ returnCode = 0; type = "success" }
+                    @{ returnCode = 1707; type = "success" }
+                    @{ returnCode = 3010; type = "softReboot" }
+                    @{ returnCode = 1641; type = "hardReboot" }
+                    @{ returnCode = 1618; type = "retry" }
+                )
+            }
+
+            $appJson = $appBody | ConvertTo-Json -Depth 10
+
+            # Debug: Log the JSON being sent
+            Write-Host "`nJSON Payload (first 500 chars):" -ForegroundColor Gray
+            Write-Host $appJson.Substring(0, [Math]::Min(500, $appJson.Length)) -ForegroundColor DarkGray
+
+            $createAppUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps"
+
+            try {
+                $appResponse = Invoke-RestMethod -Method Post -Uri $createAppUrl -Headers $headers -Body $appJson -ErrorAction Stop
+            } catch {
+                # Enhanced error logging for Graph API errors
+                Write-Host "✗ Graph API Error Details:" -ForegroundColor Red
+                Write-Host "  Status: $($_.Exception.Response.StatusCode.Value__)" -ForegroundColor Red
+
+                if ($_.ErrorDetails.Message) {
+                    Write-Host "  Error Message:" -ForegroundColor Red
+                    Write-Host $_.ErrorDetails.Message -ForegroundColor DarkRed
+
+                    try {
+                        $errorJson = $_.ErrorDetails.Message | ConvertFrom-Json
+                        if ($errorJson.error.message) {
+                            Write-Host "  Detailed Message: $($errorJson.error.message)" -ForegroundColor Red
+                        }
+                    } catch {}
+                }
+
+                throw
+            }
+
+            $appId = $appResponse.id
+
+            Write-Host "✓ Win32 app created successfully!" -ForegroundColor Green
+            Write-Host "  - App ID: $appId" -ForegroundColor Gray
+            Write-Host "  - Display Name: $displayName" -ForegroundColor Gray
+
+            # PHASE 2: Upload .intunewin file content
+            Write-Host "`nPhase 2: Uploading .intunewin file content..." -ForegroundColor Yellow
+
+            # Step 1: Create ContentVersion
+            Write-Host "  → Creating content version..." -ForegroundColor Gray
+            $contentVersionUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions"
+            $contentVersionBody = @{} | ConvertTo-Json
+            $contentVersionResponse = Invoke-RestMethod -Method Post -Uri $contentVersionUrl -Headers $headers -Body $contentVersionBody -ErrorAction Stop
+            $contentVersionId = $contentVersionResponse.id
+            Write-Host "  ✓ Content version created: $contentVersionId" -ForegroundColor Green
+
+            # Step 2: Extract the inner encrypted file from .intunewin package
+            Write-Host "  → Extracting inner encrypted file from .intunewin..." -ForegroundColor Gray
+
+            # .intunewin is a ZIP file containing:
+            # - Metadata/Detection.xml (encryption info)
+            # - Contents/IntunePackage.intunewin (the actual encrypted blob to upload)
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $tempExtractPath = Join-Path $env:TEMP "intunewin_extract_$(Get-Random)"
+
+            try {
+                [System.IO.Compression.ZipFile]::ExtractToDirectory($intunewinPath, $tempExtractPath)
+
+                # Find Detection.xml
+                $detectionXml = Get-ChildItem -Path $tempExtractPath -Filter "Detection.xml" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+
+                if (-not $detectionXml) {
+                    throw "Detection.xml not found in .intunewin package"
+                }
+
+                # Find the inner IntunePackage.intunewin file (the encrypted blob)
+                $innerIntunewinFile = Get-ChildItem -Path $tempExtractPath -Filter "IntunePackage.intunewin" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+
+                if (-not $innerIntunewinFile) {
+                    throw "IntunePackage.intunewin not found in Contents folder"
+                }
+
+                # THIS is the file we need to upload!
+                $uploadFilePath = $innerIntunewinFile.FullName
+                $fileSize = $innerIntunewinFile.Length
+
+                Write-Host "  ✓ Found inner encrypted file: $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Green
+
+                # Parse XML
+                [xml]$detectionContent = Get-Content $detectionXml.FullName
+                $encryptionInfo = $detectionContent.ApplicationInfo.EncryptionInfo
+
+                $encryptionKey = $encryptionInfo.EncryptionKey
+                $macKey = $encryptionInfo.macKey
+                $initializationVector = $encryptionInfo.initializationVector
+                $mac = $encryptionInfo.mac
+                $profileIdentifier = "ProfileVersion1"  # Intune only accepts "ProfileVersion1"
+                $fileDigest = $encryptionInfo.fileDigest
+                $fileDigestAlgorithm = $encryptionInfo.fileDigestAlgorithm
+
+                # Get unencrypted size from Detection.xml
+                $unencryptedSize = [int64]$detectionContent.ApplicationInfo.UnencryptedContentSize
+
+                Write-Host "  ✓ Encryption info extracted" -ForegroundColor Green
+                Write-Host "  → USING size (unencrypted): $([math]::Round($unencryptedSize/1MB, 2)) MB" -ForegroundColor Cyan
+                Write-Host "  → USING sizeEncrypted (inner encrypted file): $([math]::Round($fileSize/1MB, 2)) MB" -ForegroundColor Cyan
+
+                # NOTE: Don't cleanup temp folder yet - we need $uploadFilePath for the upload!
+
+            } catch {
+                # Cleanup on error
+                if (Test-Path $tempExtractPath) {
+                    Remove-Item $tempExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                throw
+            }
+
+            # Step 4: Create File entry in Intune
+            Write-Host "  → Creating file entry in Intune..." -ForegroundColor Gray
+
+            $fileBody = @{
+                "@odata.type" = "#microsoft.graph.mobileAppContentFile"
+                name = $intunewinFileName
+                size = $unencryptedSize          # UnencryptedContentSize from Detection.xml
+                sizeEncrypted = $fileSize        # Size of inner IntunePackage.intunewin (encrypted blob)
+                manifest = $null
+                isDependency = $false
+            } | ConvertTo-Json
+
+            $fileUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions/$contentVersionId/files"
+            $fileResponse = Invoke-RestMethod -Method Post -Uri $fileUrl -Headers $headers -Body $fileBody -ErrorAction Stop
+            $fileId = $fileResponse.id
+
+            Write-Host "  ✓ File entry created: $fileId" -ForegroundColor Green
+
+            # Step 5: Wait for Azure Storage URL
+            Write-Host "  → Waiting for Azure Storage upload URL..." -ForegroundColor Gray
+
+            $maxWaitTime = 60 # seconds
+            $waitInterval = 2 # seconds
+            $elapsed = 0
+            $azureStorageUri = $null
+
+            while ($elapsed -lt $maxWaitTime) {
+                Start-Sleep -Seconds $waitInterval
+                $elapsed += $waitInterval
+
+                $fileStatusUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions/$contentVersionId/files/$fileId"
+                $fileStatus = Invoke-RestMethod -Method Get -Uri $fileStatusUrl -Headers $headers -ErrorAction Stop
+
+                if ($fileStatus.uploadState -eq "azureStorageUriRequestSuccess") {
+                    $azureStorageUri = $fileStatus.azureStorageUri
+                    Write-Host "  ✓ Azure Storage URL received" -ForegroundColor Green
+                    break
+                }
+
+                Write-Host "  ... waiting ($elapsed/$maxWaitTime seconds)" -ForegroundColor DarkGray
+            }
+
+            if (-not $azureStorageUri) {
+                throw "Timeout waiting for Azure Storage URL"
+            }
+
+            # Step 6: Upload inner encrypted file to Azure Storage
+            Write-Host "  → Uploading encrypted file to Azure Storage..." -ForegroundColor Yellow
+
+            $chunkSize = 6MB
+            $totalChunks = [math]::Ceiling($fileSize / $chunkSize)
+
+            Write-Host "  → Total chunks: $totalChunks" -ForegroundColor Gray
+
+            # Open file stream for reading the INNER encrypted file
+            $fileStream = [System.IO.File]::OpenRead($uploadFilePath)
+
+            try {
+                for ($i = 0; $i -lt $totalChunks; $i++) {
+                    $chunkStart = $i * $chunkSize
+                    $currentChunkSize = [math]::Min($chunkSize, $fileSize - $chunkStart)
+
+                    # Read chunk from stream
+                    $chunkBytes = New-Object byte[] $currentChunkSize
+                    $fileStream.Position = $chunkStart
+                    $bytesRead = $fileStream.Read($chunkBytes, 0, $currentChunkSize)
+
+                    if ($bytesRead -ne $currentChunkSize) {
+                        throw "Failed to read expected chunk size. Expected $currentChunkSize, got $bytesRead"
+                    }
+
+                    # Azure Block Blob upload
+                    $blockId = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($i.ToString('0000')))
+                    $uploadUrl = "$azureStorageUri&comp=block&blockid=$blockId"
+
+                    $chunkNum = $i + 1
+                    Write-Host "  ... uploading chunk $chunkNum/$totalChunks ($([math]::Round($currentChunkSize/1MB, 2)) MB)" -ForegroundColor DarkGray
+
+                    # Use Invoke-WebRequest for binary data (more reliable than Invoke-RestMethod)
+                    $response = Invoke-WebRequest -Method Put -Uri $uploadUrl -Body $chunkBytes -Headers @{
+                        "x-ms-blob-type" = "BlockBlob"
+                    } -UseBasicParsing -ErrorAction Stop
+
+                    if ($response.StatusCode -ne 201) {
+                        throw "Chunk upload failed with status $($response.StatusCode)"
+                    }
+                }
+            } finally {
+                $fileStream.Close()
+                $fileStream.Dispose()
+            }
+
+            # Commit blocks
+            Write-Host "  → Committing blocks..." -ForegroundColor Gray
+
+            $blockListXml = '<?xml version="1.0" encoding="utf-8"?><BlockList>'
+            for ($i = 0; $i -lt $totalChunks; $i++) {
+                $blockId = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($i.ToString('0000')))
+                $blockListXml += "<Latest>$blockId</Latest>"
+            }
+            $blockListXml += '</BlockList>'
+
+            $commitUrl = "$azureStorageUri&comp=blocklist"
+            $commitHeaders = @{
+                "Content-Type" = "application/xml"
+                "x-ms-blob-content-type" = "application/octet-stream"
+            }
+
+            Invoke-RestMethod -Method Put -Uri $commitUrl -Headers $commitHeaders -Body $blockListXml -ErrorAction Stop | Out-Null
+
+            Write-Host "  ✓ File uploaded to Azure Storage" -ForegroundColor Green
+
+            # Step 7: Commit file in Intune
+            Write-Host "  → Committing file in Intune..." -ForegroundColor Gray
+
+            # Debug: Log encryption info
+            Write-Host "  → Encryption Key: $($encryptionKey.Substring(0, [Math]::Min(20, $encryptionKey.Length)))..." -ForegroundColor DarkGray
+            Write-Host "  → Profile ID: $profileIdentifier" -ForegroundColor DarkGray
+
+            # Note: The /commit endpoint does NOT accept @odata.type - it will reject with validation error
+            $commitBody = @{
+                fileEncryptionInfo = @{
+                    encryptionKey = $encryptionKey
+                    macKey = $macKey
+                    initializationVector = $initializationVector
+                    mac = $mac
+                    profileIdentifier = $profileIdentifier
+                    fileDigest = $fileDigest
+                    fileDigestAlgorithm = $fileDigestAlgorithm
+                }
+            } | ConvertTo-Json -Depth 10
+
+            Write-Host "  → Commit JSON (first 300 chars):" -ForegroundColor DarkGray
+            Write-Host $commitBody.Substring(0, [Math]::Min(300, $commitBody.Length)) -ForegroundColor DarkGray
+
+            $commitFileUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions/$contentVersionId/files/$fileId/commit"
+
+            try {
+                Invoke-RestMethod -Method Post -Uri $commitFileUrl -Headers $headers -Body $commitBody -ErrorAction Stop | Out-Null
+                Write-Host "  ✓ File committed" -ForegroundColor Green
+            } catch {
+                Write-Host "  ✗ Commit error details:" -ForegroundColor Red
+                if ($_.ErrorDetails.Message) {
+                    Write-Host $_.ErrorDetails.Message -ForegroundColor DarkRed
+                }
+                throw
+            }
+
+            # Step 8: Wait for commit to complete (can take several minutes for large files)
+            Write-Host "  → Waiting for commit to complete..." -ForegroundColor Gray
+
+            $commitMaxWaitTime = 180 # 3 minutes for large files (135MB)
+            $elapsed = 0
+            $commitSuccess = $false
+
+            while ($elapsed -lt $commitMaxWaitTime) {
+                Start-Sleep -Seconds $waitInterval
+                $elapsed += $waitInterval
+
+                $fileStatusUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/microsoft.graph.win32LobApp/contentVersions/$contentVersionId/files/$fileId"
+                $fileStatus = Invoke-RestMethod -Method Get -Uri $fileStatusUrl -Headers $headers -ErrorAction Stop
+
+                $currentState = $fileStatus.uploadState
+
+                # Log status every 10 seconds
+                if ($elapsed % 10 -eq 0) {
+                    Write-Host "  ... status: $currentState ($elapsed/$commitMaxWaitTime seconds)" -ForegroundColor DarkGray
+                }
+
+                if ($currentState -eq "commitFileSuccess") {
+                    $commitSuccess = $true
+                    Write-Host "  ✓ Commit completed successfully!" -ForegroundColor Green
+                    break
+                }
+                elseif ($currentState -like "*fail*" -or $currentState -like "*error*") {
+                    Write-Host "  ✗ File commit failed!" -ForegroundColor Red
+                    Write-Host "  → Full file status:" -ForegroundColor Red
+                    $fileStatus | ConvertTo-Json -Depth 5 | Write-Host -ForegroundColor DarkRed
+
+                    # Try to get more error details
+                    if ($fileStatus.uploadStateMessage) {
+                        Write-Host "  → Error Message: $($fileStatus.uploadStateMessage)" -ForegroundColor Red
+                    }
+
+                    throw "File commit failed with state: $currentState. See above for details."
+                }
+            }
+
+            if (-not $commitSuccess) {
+                throw "Timeout waiting for file commit after $commitMaxWaitTime seconds. Last status: $currentState"
+            }
+
+            # Step 9: Update app with committed content version
+            Write-Host "  → Finalizing app..." -ForegroundColor Gray
+
+            $updateBody = @{
+                "@odata.type" = "#microsoft.graph.win32LobApp"
+                committedContentVersion = $contentVersionId
+            } | ConvertTo-Json
+
+            $updateUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId"
+            Invoke-RestMethod -Method Patch -Uri $updateUrl -Headers $headers -Body $updateBody -ErrorAction Stop | Out-Null
+
+            Write-Host "`n✓✓✓ SUCCESS! App fully deployed to Intune! ✓✓✓" -ForegroundColor Green
+            Write-Host "  - App ID: $appId" -ForegroundColor Cyan
+            Write-Host "  - Display Name: $displayName" -ForegroundColor Cyan
+            Write-Host "  - Content Version: $contentVersionId" -ForegroundColor Cyan
+
+            # Cleanup temp extraction folder
+            if (Test-Path $tempExtractPath) {
+                Remove-Item $tempExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                appId = $appId
+                appName = $displayName
+                contentVersionId = $contentVersionId
+                message = "Win32 app successfully created and fully deployed to Microsoft Intune! The app is ready for assignment."
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Upload failed: $errorMsg" -ForegroundColor Red
+
+            # Cleanup temp extraction folder
+            if (Test-Path $tempExtractPath) {
+                Remove-Item $tempExtractPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+
+            # Try to extract detailed error message
+            $detailedError = $errorMsg
+            if ($_.ErrorDetails.Message) {
+                try {
+                    $errorJson = $_.ErrorDetails.Message | ConvertFrom-Json
+                    if ($errorJson.error.message) {
+                        $detailedError = $errorJson.error.message
+                    }
+                } catch {}
+            }
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to upload to Intune: $detailedError"
+            } -StatusCode 500
+        }
+    }
+
+    # API: Get Intune Setup Guide
+    Add-PodeRoute -Method Get -Path '/api/intune/setup-guide' -ScriptBlock {
+        $rootPath = $using:RootPath
+        $guideFile = Join-Path $rootPath "Tools\INTUNE-SETUP.md"
+
+        if (-not (Test-Path $guideFile)) {
+            Write-PodeJsonResponse -Value @{ error = "Setup guide not found" } -StatusCode 404
+            return
+        }
+
+        $guideContent = Get-Content $guideFile -Raw -Encoding UTF8
+        Write-PodeHtmlResponse -Value "<pre style='white-space: pre-wrap; word-wrap: break-word; padding: 20px; background: #1e1e1e; color: #d4d4d4; border-radius: 4px;'>$guideContent</pre>"
+    }
+
+    # API: Test Intune Connection (using direct Graph API instead of IntuneWin32App module)
+    Add-PodeRoute -Method Post -Path '/api/intune/test-connection' -ScriptBlock {
+        try {
+            # Get credentials from request body
+            $body = $WebEvent.Data
+
+            # Debug: Log received data
+            Write-Host "Received test connection request" -ForegroundColor Cyan
+
+            # Trim all inputs to remove accidental whitespace
+            $tenantId = $body.TenantId.Trim()
+            $clientId = $body.ClientId.Trim()
+            $clientSecret = $body.ClientSecret.Trim()
+
+            # Validate inputs
+            if ([string]::IsNullOrWhiteSpace($tenantId) -or
+                [string]::IsNullOrWhiteSpace($clientId) -or
+                [string]::IsNullOrWhiteSpace($clientSecret)) {
+                Write-Host "Validation failed: Missing required fields" -ForegroundColor Red
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Missing required fields: Tenant ID, Client ID, or Client Secret"
+                } -StatusCode 400
+                return
+            }
+
+            Write-Host "Attempting to connect to Microsoft Graph API..." -ForegroundColor Yellow
+            Write-Host "Tenant ID: $tenantId" -ForegroundColor Gray
+            Write-Host "Client ID: $clientId" -ForegroundColor Gray
+
+            # Request OAuth token directly from Azure AD
+            try {
+                Write-Host "Requesting OAuth token from Azure AD..." -ForegroundColor Yellow
+
+                $tokenBody = @{
+                    client_id     = $clientId
+                    scope         = "https://graph.microsoft.com/.default"
+                    client_secret = $clientSecret
+                    grant_type    = "client_credentials"
+                }
+
+                $tokenUrl = "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token"
+                $tokenResponse = Invoke-RestMethod -Method Post -Uri $tokenUrl -Body $tokenBody -ContentType "application/x-www-form-urlencoded" -ErrorAction Stop
+
+                $accessToken = $tokenResponse.access_token
+                Write-Host "✓ Successfully obtained OAuth token" -ForegroundColor Green
+
+                # Test the token by querying Intune apps
+                Write-Host "Testing Intune API access..." -ForegroundColor Yellow
+
+                $headers = @{
+                    "Authorization" = "Bearer $accessToken"
+                    "Content-Type"  = "application/json"
+                }
+
+                $graphUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?`$top=1"
+                $appsResponse = Invoke-RestMethod -Method Get -Uri $graphUrl -Headers $headers -ErrorAction Stop
+
+                Write-Host "✓ Successfully connected to Microsoft Intune!" -ForegroundColor Green
+                Write-Host "Found $($appsResponse.'@odata.count') app(s) in Intune" -ForegroundColor Gray
+
+                Write-PodeJsonResponse -Value @{
+                    success = $true
+                    message = "Successfully connected to Microsoft Intune"
+                    tenantId = $tenantId
+                }
+                return
+            }
+            catch {
+                $errorMsg = $_.Exception.Message
+                Write-Host "✗ Connection failed: $errorMsg" -ForegroundColor Red
+
+                # Try to extract more details from the error
+                $detailedError = $errorMsg
+                if ($_.ErrorDetails.Message) {
+                    try {
+                        $errorJson = $_.ErrorDetails.Message | ConvertFrom-Json
+                        if ($errorJson.error_description) {
+                            $detailedError = $errorJson.error_description
+                        }
+                    } catch {}
+                }
+
+                # Determine if it's an auth error or permissions error
+                if ($errorMsg -like "*401*" -or $errorMsg -like "*unauthorized*" -or $errorMsg -like "*AADSTS*") {
+                    Write-PodeJsonResponse -Value @{
+                        success = $false
+                        error = "Authentication failed: $detailedError"
+                    } -StatusCode 401
+                }
+                elseif ($errorMsg -like "*403*" -or $errorMsg -like "*forbidden*" -or $errorMsg -like "*insufficient*") {
+                    Write-PodeJsonResponse -Value @{
+                        success = $false
+                        error = "Authentication succeeded, but insufficient permissions. Ensure 'DeviceManagementApps.ReadWrite.All' is granted and admin consent is provided. Error: $detailedError"
+                    } -StatusCode 403
+                }
+                else {
+                    Write-PodeJsonResponse -Value @{
+                        success = $false
+                        error = "Connection test failed: $detailedError"
+                    } -StatusCode 500
+                }
+                return
+            }
+        }
+        catch {
+            Write-Host "Unexpected error in test connection: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "Stack trace: $($_.ScriptStackTrace)" -ForegroundColor Red
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Test connection failed: $($_.Exception.Message)"
+            } -StatusCode 500
+            return
+        }
+    }
+
+    # ==========================================
+    # INTUNE APPS DASHBOARD - Phase 3
+    # ==========================================
+
+    # Helper function to get Intune access token
+    function Get-IntuneAccessToken {
+        param(
+            [string]$TenantId,
+            [string]$ClientId,
+            [string]$ClientSecret
+        )
+
+        try {
+            $tokenBody = @{
+                client_id     = $ClientId
+                scope         = "https://graph.microsoft.com/.default"
+                client_secret = $ClientSecret
+                grant_type    = "client_credentials"
+            }
+
+            $tokenUrl = "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token"
+            $tokenResponse = Invoke-RestMethod -Method Post -Uri $tokenUrl -Body $tokenBody -ContentType "application/x-www-form-urlencoded" -ErrorAction Stop
+
+            return $tokenResponse.access_token
+        }
+        catch {
+            throw "Failed to obtain access token: $($_.Exception.Message)"
+        }
+    }
+
+    # API: Get all Intune apps
+    Add-PodeRoute -Method Get -Path '/api/intune/apps' -ScriptBlock {
+        try {
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "GET /api/intune/apps - Fetching Intune apps list" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            # Load config
+            $rootPath = $using:RootPath
+            $configPath = Join-Path $rootPath "Config\settings.json"
+
+            if (-not (Test-Path $configPath)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Configuration file not found. Please configure Intune integration in Settings."
+                } -StatusCode 400
+                return
+            }
+
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            if (-not $config.IntuneIntegration.Enabled) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Intune integration is not enabled. Please enable it in Settings."
+                } -StatusCode 400
+                return
+            }
+
+            $tenantId = $config.IntuneIntegration.TenantId
+            $clientId = $config.IntuneIntegration.ClientId
+            $clientSecret = $config.IntuneIntegration.ClientSecret
+
+            # Get access token
+            Write-Host "Authenticating with Microsoft Graph..." -ForegroundColor Yellow
+            $accessToken = Get-IntuneAccessToken -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+
+            # Fetch apps from Intune
+            Write-Host "Fetching Win32 apps from Intune..." -ForegroundColor Yellow
+
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            # Get Win32 LOB apps (filter by type)
+            $graphUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?`$filter=isof('microsoft.graph.win32LobApp')&`$orderby=displayName"
+            $appsResponse = Invoke-RestMethod -Method Get -Uri $graphUrl -Headers $headers -ErrorAction Stop
+
+            $apps = $appsResponse.value
+
+            # Handle pagination if there are many apps
+            while ($appsResponse.'@odata.nextLink') {
+                Write-Host "  → Fetching next page..." -ForegroundColor Gray
+                $appsResponse = Invoke-RestMethod -Method Get -Uri $appsResponse.'@odata.nextLink' -Headers $headers -ErrorAction Stop
+                $apps += $appsResponse.value
+            }
+
+            Write-Host "✓ Successfully retrieved $($apps.Count) app(s)" -ForegroundColor Green
+
+            # Transform data for frontend
+            $appsList = $apps | ForEach-Object {
+                @{
+                    id = $_.id
+                    displayName = $_.displayName
+                    publisher = $_.publisher
+                    description = $_.description
+                    createdDateTime = $_.createdDateTime
+                    lastModifiedDateTime = $_.lastModifiedDateTime
+                    fileName = $_.fileName
+                    size = $_.size
+                    committedContentVersion = $_.committedContentVersion
+                    notes = $_.notes
+                }
+            }
+
+            # Ensure apps is always an array (PowerShell serializes single items as objects)
+            $appsArray = @($appsList)
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                apps = $appsArray
+                count = $appsArray.Count
+                timestamp = (Get-Date).ToString("o")
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Error fetching Intune apps: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to fetch Intune apps: $errorMsg"
+            } -StatusCode 500
+        }
+    }
+
+    # API: Get specific app details
+    Add-PodeRoute -Method Get -Path '/api/intune/apps/:id' -ScriptBlock {
+        try {
+            # Get app ID from route parameter
+            $appId = $WebEvent.Parameters['id']
+
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "GET /api/intune/apps/$appId - Fetching app details" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            if ([string]::IsNullOrWhiteSpace($appId)) {
+                Write-Host "✗ No app ID provided" -ForegroundColor Red
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "No app ID provided"
+                } -StatusCode 400
+                return
+            }
+
+            # Load config
+            $rootPath = $using:RootPath
+            $configPath = Join-Path $rootPath "Config\settings.json"
+
+            if (-not (Test-Path $configPath)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Configuration file not found."
+                } -StatusCode 400
+                return
+            }
+
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            $tenantId = $config.IntuneIntegration.TenantId
+            $clientId = $config.IntuneIntegration.ClientId
+            $clientSecret = $config.IntuneIntegration.ClientSecret
+
+            # Get access token
+            $accessToken = Get-IntuneAccessToken -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+
+            # Fetch app details
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            $graphUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId"
+            $app = Invoke-RestMethod -Method Get -Uri $graphUrl -Headers $headers -ErrorAction Stop
+
+            Write-Host "✓ Retrieved app: $($app.displayName)" -ForegroundColor Green
+
+            # Get assignments
+            Write-Host "Fetching assignments..." -ForegroundColor Yellow
+            $assignmentsUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assignments"
+            $assignmentsResponse = Invoke-RestMethod -Method Get -Uri $assignmentsUrl -Headers $headers -ErrorAction SilentlyContinue
+
+            $assignments = @()
+            if ($assignmentsResponse.value) {
+                $assignments = $assignmentsResponse.value | ForEach-Object {
+                    @{
+                        id = $_.id
+                        intent = $_.intent
+                        targetGroupId = $_.target.groupId
+                    }
+                }
+            }
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                app = $app
+                assignments = $assignments
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Error fetching app details: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to fetch app details: $errorMsg"
+            } -StatusCode 500
+        }
+    }
+
+    # API: Get app install status (deployment status)
+    Add-PodeRoute -Method Get -Path '/api/intune/apps/:id/status' -ScriptBlock {
+        try {
+            $appId = $WebEvent.Parameters['id']
+
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "GET /api/intune/apps/$appId/status - Fetching install status" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            # Load config
+            $rootPath = $using:RootPath
+            $configPath = Join-Path $rootPath "Config\settings.json"
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            $tenantId = $config.IntuneIntegration.TenantId
+            $clientId = $config.IntuneIntegration.ClientId
+            $clientSecret = $config.IntuneIntegration.ClientSecret
+
+            # Get access token
+            $accessToken = Get-IntuneAccessToken -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            # Get device install status with pagination support
+            $statusUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/deviceStatuses"
+            $allStatuses = @()
+            $statusResponse = Invoke-RestMethod -Method Get -Uri $statusUrl -Headers $headers -ErrorAction SilentlyContinue
+
+            if ($statusResponse.value) {
+                $allStatuses += $statusResponse.value
+
+                # Handle pagination for large deployments
+                while ($statusResponse.'@odata.nextLink') {
+                    $statusResponse = Invoke-RestMethod -Method Get -Uri $statusResponse.'@odata.nextLink' -Headers $headers -ErrorAction SilentlyContinue
+                    if ($statusResponse.value) {
+                        $allStatuses += $statusResponse.value
+                    }
+                }
+            }
+
+            $installStatusSummary = @{
+                installed = 0
+                failed = 0
+                notInstalled = 0
+                pending = 0
+            }
+
+            $deviceDetails = @()
+
+            if ($allStatuses.Count -gt 0) {
+                foreach ($status in $allStatuses) {
+                    # Count by status
+                    switch ($status.installState) {
+                        "installed" { $installStatusSummary.installed++ }
+                        "failed" { $installStatusSummary.failed++ }
+                        "notInstalled" { $installStatusSummary.notInstalled++ }
+                        "installing" { $installStatusSummary.pending++ }
+                        default { $installStatusSummary.pending++ }
+                    }
+
+                    # Build detailed device info
+                    $deviceInfo = @{
+                        deviceName = $status.deviceName
+                        userName = $status.userName
+                        userPrincipalName = $status.userPrincipalName
+                        installState = $status.installState
+                        installStateDetail = $status.installStateDetail
+                        lastSyncDateTime = $status.lastSyncDateTime
+                        errorCode = $status.errorCode
+                        osVersion = $status.osVersion
+                        osDescription = $status.osDescription
+                        deviceId = $status.deviceId
+                    }
+
+                    # Add error details for failed installations
+                    if ($status.installState -eq "failed" -and $status.errorCode) {
+                        $errorCode = $status.errorCode
+                        # Common Intune error codes
+                        $errorMessage = switch ($errorCode) {
+                            "0x80070032" { "The request is not supported (File in use)" }
+                            "0x80070643" { "Installation failed (Generic MSI error)" }
+                            "0x87D1041C" { "Application failed to install (Intune specific)" }
+                            "0x87D1FDE8" { "App installation failed due to installation errors" }
+                            "0x80070005" { "Access denied" }
+                            "0x80070490" { "Element not found" }
+                            "0x8007000D" { "The data is invalid" }
+                            default { "Error code: $errorCode" }
+                        }
+                        $deviceInfo.errorMessage = $errorMessage
+                    }
+
+                    $deviceDetails += $deviceInfo
+                }
+            }
+
+            Write-Host "✓ Retrieved install status: $($allStatuses.Count) device(s)" -ForegroundColor Green
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                summary = $installStatusSummary
+                totalDevices = $allStatuses.Count
+                devices = $deviceDetails
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Error fetching install status: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to fetch install status: $errorMsg"
+            } -StatusCode 500
+        }
+    }
+
+    # API: Get Azure AD groups for assignments
+    Add-PodeRoute -Method Get -Path '/api/intune/groups' -ScriptBlock {
+        try {
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "GET /api/intune/groups - Fetching Azure AD groups" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            # Load config
+            $rootPath = $using:RootPath
+            $configPath = Join-Path $rootPath "Config\settings.json"
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            $tenantId = $config.IntuneIntegration.TenantId
+            $clientId = $config.IntuneIntegration.ClientId
+            $clientSecret = $config.IntuneIntegration.ClientSecret
+
+            # Get access token
+            $accessToken = Get-IntuneAccessToken -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            # Get groups
+            $graphUrl = "https://graph.microsoft.com/v1.0/groups?`$select=id,displayName,description&`$top=100&`$orderby=displayName"
+            $groupsResponse = Invoke-RestMethod -Method Get -Uri $graphUrl -Headers $headers -ErrorAction Stop
+
+            $groups = $groupsResponse.value
+
+            Write-Host "✓ Retrieved $($groups.Count) group(s)" -ForegroundColor Green
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                groups = $groups
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Error fetching groups: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to fetch groups: $errorMsg"
+            } -StatusCode 500
+        }
+    }
+
+    # API: Assign app to group
+    Add-PodeRoute -Method Post -Path '/api/intune/apps/:id/assign' -ScriptBlock {
+        try {
+            $appId = $WebEvent.Parameters['id']
+            $body = $WebEvent.Data
+
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "POST /api/intune/apps/$appId/assign - Creating assignment" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            $groupId = $body.groupId
+            $intent = $body.intent  # "required", "available", or "uninstall"
+
+            if ([string]::IsNullOrWhiteSpace($groupId) -or [string]::IsNullOrWhiteSpace($intent)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "groupId and intent are required"
+                } -StatusCode 400
+                return
+            }
+
+            # Load config
+            $rootPath = $using:RootPath
+            $configPath = Join-Path $rootPath "Config\settings.json"
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            $tenantId = $config.IntuneIntegration.TenantId
+            $clientId = $config.IntuneIntegration.ClientId
+            $clientSecret = $config.IntuneIntegration.ClientSecret
+
+            # Get access token
+            $accessToken = Get-IntuneAccessToken -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            # IMPORTANT: The /assign endpoint REPLACES all assignments
+            # We need to fetch existing assignments first and add the new one to the list
+            Write-Host "Fetching existing assignments..." -ForegroundColor Yellow
+            $assignmentsUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assignments"
+            $existingAssignments = @()
+
+            try {
+                $assignmentsResponse = Invoke-RestMethod -Method Get -Uri $assignmentsUrl -Headers $headers -ErrorAction Stop
+                if ($assignmentsResponse.value) {
+                    Write-Host "Found $($assignmentsResponse.value.Count) existing assignment(s)" -ForegroundColor Yellow
+                    $existingAssignments = $assignmentsResponse.value
+                }
+            } catch {
+                Write-Host "No existing assignments found or error fetching them" -ForegroundColor Yellow
+            }
+
+            # Build the complete assignments array (existing + new)
+            $allAssignments = @()
+
+            # Add existing assignments
+            foreach ($existingAssignment in $existingAssignments) {
+                $allAssignments += @{
+                    "@odata.type" = "#microsoft.graph.mobileAppAssignment"
+                    intent = $existingAssignment.intent
+                    target = $existingAssignment.target
+                }
+            }
+
+            # Add new assignment
+            $allAssignments += @{
+                "@odata.type" = "#microsoft.graph.mobileAppAssignment"
+                intent = $intent
+                target = @{
+                    "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                    groupId = $groupId
+                }
+            }
+
+            Write-Host "Submitting $($allAssignments.Count) total assignment(s) (including new one)" -ForegroundColor Yellow
+
+            # Submit ALL assignments (this replaces the entire assignment list)
+            $assignmentBody = @{
+                mobileAppAssignments = $allAssignments
+            } | ConvertTo-Json -Depth 10
+
+            $assignUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assign"
+            $assignResponse = Invoke-RestMethod -Method Post -Uri $assignUrl -Headers $headers -Body $assignmentBody -ErrorAction Stop
+
+            Write-Host "✓ Assignment created successfully (total assignments: $($allAssignments.Count))" -ForegroundColor Green
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                message = "App assigned successfully"
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Error creating assignment: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to create assignment: $errorMsg"
+            } -StatusCode 500
+        }
+    }
+
+    # API: Create deployment groups for an app
+    Add-PodeRoute -Method Post -Path '/api/intune/apps/:id/create-groups' -ScriptBlock {
+        try {
+            $appId = $WebEvent.Parameters['id']
+            $body = $WebEvent.Data
+
+            Write-Host "`n========================================" -ForegroundColor Cyan
+            Write-Host "POST /api/intune/apps/$appId/create-groups - Creating deployment groups" -ForegroundColor Cyan
+            Write-Host "========================================" -ForegroundColor Cyan
+
+            $appName = $body.appName
+            $prefix = $body.prefix  # Optional prefix (e.g., "SCI ")
+            $autoAssign = $body.autoAssign  # true/false
+
+            if ([string]::IsNullOrWhiteSpace($appName)) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "appName is required"
+                } -StatusCode 400
+                return
+            }
+
+            # Load config
+            $rootPath = $using:RootPath
+            $configPath = Join-Path $rootPath "Config\settings.json"
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+            $tenantId = $config.IntuneIntegration.TenantId
+            $clientId = $config.IntuneIntegration.ClientId
+            $clientSecret = $config.IntuneIntegration.ClientSecret
+
+            # Get access token
+            $accessToken = Get-IntuneAccessToken -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+
+            $headers = @{
+                "Authorization" = "Bearer $accessToken"
+                "Content-Type"  = "application/json"
+            }
+
+            # Define group templates
+            $groupTemplates = @(
+                @{
+                    name = "$prefix$appName - Install (Required)"
+                    description = "Devices/Users in this group will have $appName automatically installed (Required deployment)"
+                    intent = "required"
+                },
+                @{
+                    name = "$prefix$appName - Available"
+                    description = "Devices/Users in this group can install $appName from Company Portal (Available deployment)"
+                    intent = "available"
+                },
+                @{
+                    name = "$prefix$appName - Uninstall"
+                    description = "Devices/Users in this group will have $appName uninstalled"
+                    intent = "uninstall"
+                }
+            )
+
+            $createdGroups = @()
+            $createdGroupIds = @()
+
+            # Create each group first (don't assign yet)
+            foreach ($template in $groupTemplates) {
+                try {
+                    $groupBody = @{
+                        displayName = $template.name
+                        description = $template.description
+                        mailEnabled = $false
+                        mailNickname = ($template.name -replace '[^a-zA-Z0-9]', '').Substring(0, [Math]::Min(64, ($template.name -replace '[^a-zA-Z0-9]', '').Length))
+                        securityEnabled = $true
+                        groupTypes = @()
+                    } | ConvertTo-Json -Depth 10
+
+                    Write-Host "Creating group: $($template.name)" -ForegroundColor Yellow
+
+                    $createUrl = "https://graph.microsoft.com/v1.0/groups"
+                    $groupResponse = Invoke-RestMethod -Method Post -Uri $createUrl -Headers $headers -Body $groupBody -ErrorAction Stop
+
+                    Write-Host "✓ Group created: $($groupResponse.displayName) (ID: $($groupResponse.id))" -ForegroundColor Green
+
+                    $createdGroups += @{
+                        id = $groupResponse.id
+                        name = $groupResponse.displayName
+                        description = $groupResponse.description
+                        intent = $template.intent
+                    }
+
+                    $createdGroupIds += $groupResponse.id
+
+                } catch {
+                    Write-Host "✗ Failed to create group: $($template.name) - $($_.Exception.Message)" -ForegroundColor Red
+                }
+            }
+
+            # Auto-assign all groups at once if requested
+            if ($autoAssign -eq $true -and $createdGroups.Count -gt 0) {
+                try {
+                    Write-Host "Auto-assigning $($createdGroups.Count) group(s) to app..." -ForegroundColor Yellow
+
+                    # Get existing assignments first
+                    $assignmentsUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assignments"
+                    $existingAssignments = @()
+
+                    try {
+                        $assignmentsResponse = Invoke-RestMethod -Method Get -Uri $assignmentsUrl -Headers $headers -ErrorAction Stop
+                        if ($assignmentsResponse.value) {
+                            Write-Host "Found $($assignmentsResponse.value.Count) existing assignment(s)" -ForegroundColor Yellow
+                            $existingAssignments = $assignmentsResponse.value
+                        }
+                    } catch {
+                        Write-Host "No existing assignments found" -ForegroundColor Yellow
+                    }
+
+                    # Build complete assignments array (existing + new)
+                    $allAssignments = @()
+
+                    # Add existing assignments
+                    foreach ($existingAssignment in $existingAssignments) {
+                        $allAssignments += @{
+                            "@odata.type" = "#microsoft.graph.mobileAppAssignment"
+                            intent = $existingAssignment.intent
+                            target = $existingAssignment.target
+                        }
+                    }
+
+                    # Add new assignments for all created groups
+                    foreach ($createdGroup in $createdGroups) {
+                        $allAssignments += @{
+                            "@odata.type" = "#microsoft.graph.mobileAppAssignment"
+                            intent = $createdGroup.intent
+                            target = @{
+                                "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                                groupId = $createdGroup.id
+                            }
+                        }
+                    }
+
+                    Write-Host "Submitting $($allAssignments.Count) total assignment(s)" -ForegroundColor Yellow
+
+                    # Submit ALL assignments at once
+                    $assignmentBody = @{
+                        mobileAppAssignments = $allAssignments
+                    } | ConvertTo-Json -Depth 10
+
+                    $assignUrl = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$appId/assign"
+                    Invoke-RestMethod -Method Post -Uri $assignUrl -Headers $headers -Body $assignmentBody -ErrorAction Stop
+
+                    Write-Host "✓ Auto-assigned all $($createdGroups.Count) group(s) successfully" -ForegroundColor Green
+
+                } catch {
+                    Write-Host "⚠ Warning: Failed to auto-assign groups: $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
+
+            if ($createdGroups.Count -eq 0) {
+                Write-PodeJsonResponse -Value @{
+                    success = $false
+                    error = "Failed to create any groups"
+                } -StatusCode 500
+                return
+            }
+
+            Write-Host "✓ Successfully created $($createdGroups.Count) group(s)" -ForegroundColor Green
+
+            Write-PodeJsonResponse -Value @{
+                success = $true
+                message = "Created $($createdGroups.Count) deployment group(s)"
+                groups = $createdGroups
+                autoAssigned = $autoAssign
+            }
+
+        } catch {
+            $errorMsg = $_.Exception.Message
+            Write-Host "✗ Error creating deployment groups: $errorMsg" -ForegroundColor Red
+
+            Write-PodeJsonResponse -Value @{
+                success = $false
+                error = "Failed to create deployment groups: $errorMsg"
+            } -StatusCode 500
+        }
+    }
+
+    # Load additional API routes
+    $routesPath = Join-Path $PSScriptRoot "Routes\IntunePlusApis.ps1"
+    if (Test-Path $routesPath) {
+        . $routesPath
+        Write-Host "✓ Loaded extended Intune APIs" -ForegroundColor Green
     }
 }

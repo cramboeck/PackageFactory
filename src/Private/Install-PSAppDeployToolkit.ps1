@@ -47,6 +47,18 @@ function Install-PSAppDeployToolkit {
             Write-Verbose "Removed original Invoke-AppDeployToolkit.ps1 from PSADT folder (using generated version)"
         }
 
+        # Copy Invoke-AppDeployToolkit.exe from parent template folder
+        # This EXE is needed for Intune deployments and system context execution
+        $parentTemplatePath = Split-Path $SourcePath -Parent
+        $invokeExeSource = Join-Path $parentTemplatePath "Invoke-AppDeployToolkit.exe"
+        if (Test-Path $invokeExeSource) {
+            $invokeExeDest = Join-Path $DestinationPath "Invoke-AppDeployToolkit.exe"
+            Copy-Item -Path $invokeExeSource -Destination $invokeExeDest -Force
+            Write-Verbose "Copied Invoke-AppDeployToolkit.exe to package root"
+        } else {
+            Write-Warning "Invoke-AppDeployToolkit.exe not found at: $invokeExeSource"
+        }
+
         Write-Verbose "PSADT installation completed successfully"
     }
     catch {

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Activity History - PackageFactory</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="logo">
+                <h1>📊 Activity History</h1>
+                <p class="subtitle">View all actions performed in PackageFactory</p>
+            </div>
+            <div class="header-actions">
+                <button class="theme-toggle" onclick="toggleTheme()" id="theme-toggle-btn">
+                    <span class="theme-icon" id="theme-icon">🌙</span>
+                    <span id="theme-text">Dark</span>
+                </button>
+                <button class="btn btn-secondary" onclick="window.location.href='/'">🏠 Home</button>
+                <button class="btn btn-secondary" onclick="window.location.href='/intune-apps.html'">☁️ Apps</button>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div class="page-header">
+                <div>
+                    <span id="activityCount" class="badge">0 activities</span>
+                </div>
+                <button id="refreshBtn" class="btn btn-primary" onclick="loadActivities()">🔄 Refresh</button>
+            </div>
+
+            <div id="loadingState" class="loading-container" style="display:none;"><div class="spinner"></div></div>
+
+            <div id="timelineContainer" class="timeline-container"></div>
+        </main>
+    </div>
+
+    <script src="js/activity-history.js"></script>
+</body>
+</html>

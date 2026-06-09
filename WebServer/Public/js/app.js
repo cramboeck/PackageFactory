@@ -233,7 +233,29 @@ function showSettings() {
         document.getElementById('settingsDefaultLang').value = window.currentConfig.DefaultLang || 'EN';
         document.getElementById('settingsOutputPath').value = window.currentConfig.OutputPath || './Output';
         document.getElementById('settingsIncludePSADT').checked = window.currentConfig.IncludePSADT !== false;
+
+        // Load Intune Integration settings
+        const intuneConfig = window.currentConfig.IntuneIntegration || {};
+        const intuneEnabled = intuneConfig.Enabled === true;
+
+        document.getElementById('settingsIntuneEnabled').checked = intuneEnabled;
+        document.getElementById('settingsIntuneTenantId').value = intuneConfig.TenantId || '';
+        document.getElementById('settingsIntuneClientId').value = intuneConfig.ClientId || '';
+        document.getElementById('settingsIntuneClientSecret').value = intuneConfig.ClientSecret || '';
+
+        // Show/hide Intune fields based on enabled state
+        toggleIntuneFields();
     }
+
+    // Add event listener for Intune enabled checkbox
+    document.getElementById('settingsIntuneEnabled').addEventListener('change', toggleIntuneFields);
+}
+
+// Toggle Intune configuration fields
+function toggleIntuneFields() {
+    const enabled = document.getElementById('settingsIntuneEnabled').checked;
+    const fieldsDiv = document.getElementById('intune-config-fields');
+    fieldsDiv.style.display = enabled ? 'block' : 'none';
 }
 
 // Close settings modal
@@ -251,7 +273,13 @@ async function saveSettings(event) {
         DefaultLang: document.getElementById('settingsDefaultLang').value.trim() || 'EN',
         OutputPath: document.getElementById('settingsOutputPath').value.trim() || './Output',
         IncludePSADT: document.getElementById('settingsIncludePSADT').checked,
-        AutoOpenBrowser: true
+        AutoOpenBrowser: true,
+        IntuneIntegration: {
+            Enabled: document.getElementById('settingsIntuneEnabled').checked,
+            TenantId: document.getElementById('settingsIntuneTenantId').value.trim(),
+            ClientId: document.getElementById('settingsIntuneClientId').value.trim(),
+            ClientSecret: document.getElementById('settingsIntuneClientSecret').value.trim()
+        }
     };
 
     try {
@@ -531,7 +559,7 @@ async function viewPackageDetails(packageName) {
                 ` : ''}
             </div>
 
-            <div class="quick-actions">
+            <div class="quick-actions" id="quick-actions-placeholder">
                 <button class="btn btn-primary" data-folder-path="${safeValues.path}" onclick="openPackageFolder(this.getAttribute('data-folder-path'))">📂 Open Package Folder</button>
                 <button class="btn btn-secondary" onclick="closePackageDetails()">✅ Done</button>
             </div>
@@ -544,6 +572,37 @@ async function viewPackageDetails(packageName) {
                 copyToClipboard(this, text);
             });
         });
+
+        // Check IntuneWin status and update quick actions
+        try {
+            const intuneResponse = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(packageName)}/intunewin/status`);
+            const intuneStatus = await intuneResponse.json();
+
+            const quickActionsDiv = content.querySelector('#quick-actions-placeholder');
+
+            if (intuneStatus.exists) {
+                // IntuneWin package exists - show download and upload buttons
+                const intuneEnabled = window.currentConfig && window.currentConfig.IntuneIntegration && window.currentConfig.IntuneIntegration.Enabled;
+
+                quickActionsDiv.innerHTML = `
+                    <button class="btn btn-primary" data-folder-path="${safeValues.path}" onclick="openPackageFolder(this.getAttribute('data-folder-path'))">📂 Open Package Folder</button>
+                    <button class="btn btn-success" onclick="downloadIntuneWinPackage('${escapeHtml(packageName)}')">⬇️ Download .intunewin</button>
+                    ${intuneEnabled ? `<button class="btn btn-primary" onclick="uploadToIntune('${escapeHtml(packageName)}')">☁️ Upload to Intune</button>` : ''}
+                    ${intuneStatus.deploymentGuide ? `<button class="btn btn-info" onclick="viewDeploymentGuide('${escapeHtml(packageName)}')">📋 Deployment Guide</button>` : ''}
+                    <button class="btn btn-secondary" onclick="closePackageDetails()">✅ Done</button>
+                `;
+            } else {
+                // IntuneWin doesn't exist - show create button
+                quickActionsDiv.innerHTML = `
+                    <button class="btn btn-primary" data-folder-path="${safeValues.path}" onclick="openPackageFolder(this.getAttribute('data-folder-path'))">📂 Open Package Folder</button>
+                    <button class="btn btn-warning" onclick="createIntuneWinPackage('${escapeHtml(packageName)}')">📦 Create IntuneWin Package</button>
+                    <button class="btn btn-secondary" onclick="closePackageDetails()">✅ Done</button>
+                `;
+            }
+        } catch (error) {
+            console.warn('Failed to check IntuneWin status:', error);
+            // Keep default buttons if status check fails
+        }
 
         modal.style.display = 'flex';
     } catch (error) {
@@ -777,6 +836,275 @@ async function copyToClipboard(button, text) {
 // Open package folder
 function openPackageFolder(path) {
     alert('Package location:\n' + path + '\n\nPlease navigate to this folder in your file explorer.');
+}
+
+// IntuneWin Package Functions
+async function createIntuneWinPackage(packageName) {
+    const button = event.target;
+    const originalText = button.innerHTML;
+
+    try {
+        // Disable button and show progress
+        button.disabled = true;
+        button.innerHTML = '⏳ Creating IntuneWin...';
+
+        const response = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(packageName)}/intunewin`, {
+            method: 'POST'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            button.innerHTML = '✅ IntuneWin Created!';
+            button.classList.add('btn-success');
+
+            // Refresh the details view to show download buttons
+            setTimeout(() => {
+                viewPackageDetails(packageName);
+            }, 1500);
+        } else {
+            button.innerHTML = '❌ Failed';
+            button.classList.add('btn-danger');
+            alert('Failed to create IntuneWin package:\n\n' + result.error);
+
+            // Reset button after 3 seconds
+            setTimeout(() => {
+                button.innerHTML = originalText;
+                button.disabled = false;
+                button.classList.remove('btn-danger');
+            }, 3000);
+        }
+    } catch (error) {
+        button.innerHTML = '❌ Error';
+        button.classList.add('btn-danger');
+        alert('Error creating IntuneWin package: ' + error.message);
+
+        // Reset button after 3 seconds
+        setTimeout(() => {
+            button.innerHTML = originalText;
+            button.disabled = false;
+            button.classList.remove('btn-danger');
+        }, 3000);
+    }
+}
+
+async function downloadIntuneWinPackage(packageName) {
+    try {
+        window.location.href = `${API_BASE}/api/packages/${encodeURIComponent(packageName)}/intunewin/download`;
+    } catch (error) {
+        alert('Error downloading IntuneWin package: ' + error.message);
+    }
+}
+
+async function viewDeploymentGuide(packageName) {
+    try {
+        const response = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(packageName)}/intunewin/guide`);
+
+        if (!response.ok) {
+            throw new Error('Deployment guide not found');
+        }
+
+        const html = await response.text();
+
+        // Open in new window
+        const guideWindow = window.open('', '_blank', 'width=900,height=700');
+        guideWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Deployment Guide - ${packageName}</title>
+                <style>
+                    body {
+                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                        max-width: 900px;
+                        margin: 20px auto;
+                        padding: 20px;
+                        background: #f5f5f5;
+                    }
+                    pre {
+                        background: #1e1e1e;
+                        color: #d4d4d4;
+                        padding: 15px;
+                        border-radius: 4px;
+                        overflow-x: auto;
+                        white-space: pre-wrap;
+                        word-wrap: break-word;
+                    }
+                </style>
+            </head>
+            <body>${html}</body>
+            </html>
+        `);
+    } catch (error) {
+        alert('Error viewing deployment guide: ' + error.message);
+    }
+}
+
+// Test Intune Connection
+async function testIntuneConnection() {
+    const btn = document.getElementById('testIntuneConnectionBtn');
+    const statusSpan = document.getElementById('intune-connection-status');
+    const originalText = btn.innerHTML;
+
+    try {
+        // Disable button and show progress
+        btn.disabled = true;
+        btn.innerHTML = '⏳ Testing...';
+        statusSpan.innerHTML = '';
+        statusSpan.style.color = '';
+
+        // Get current values
+        const config = {
+            TenantId: document.getElementById('settingsIntuneTenantId').value.trim(),
+            ClientId: document.getElementById('settingsIntuneClientId').value.trim(),
+            ClientSecret: document.getElementById('settingsIntuneClientSecret').value.trim()
+        };
+
+        // Validate fields
+        if (!config.TenantId || !config.ClientId || !config.ClientSecret) {
+            throw new Error('Please fill in all Intune configuration fields');
+        }
+
+        // Call test API
+        const response = await fetch(`${API_BASE}/api/intune/test-connection`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(config)
+        });
+
+        // Check if response is ok
+        if (!response.ok) {
+            // Try to get error message from response
+            let errorMessage = `Server error: ${response.status} ${response.statusText}`;
+            try {
+                const errorData = await response.json();
+                if (errorData.error) {
+                    errorMessage = errorData.error;
+                }
+            } catch (e) {
+                // If JSON parsing fails, try to get text
+                try {
+                    const errorText = await response.text();
+                    if (errorText) {
+                        errorMessage = errorText.substring(0, 200); // Limit error message length
+                    }
+                } catch (e2) {
+                    // Keep default error message
+                }
+            }
+            throw new Error(errorMessage);
+        }
+
+        // Parse JSON response
+        let result;
+        try {
+            result = await response.json();
+        } catch (e) {
+            throw new Error('Server returned invalid response. Please check server logs.');
+        }
+
+        if (result.success) {
+            statusSpan.innerHTML = '✅ Connected successfully!';
+            statusSpan.style.color = 'var(--success-color)';
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        } else {
+            throw new Error(result.error || 'Connection test failed');
+        }
+    } catch (error) {
+        statusSpan.innerHTML = '❌ ' + error.message;
+        statusSpan.style.color = 'var(--danger-color)';
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+        console.error('Test connection error:', error);
+    }
+}
+
+// View Intune Setup Guide
+async function viewIntuneSetupGuide() {
+    try {
+        const response = await fetch(`${API_BASE}/api/intune/setup-guide`);
+
+        if (!response.ok) {
+            throw new Error('Setup guide not found');
+        }
+
+        const html = await response.text();
+
+        // Open in new window
+        const guideWindow = window.open('', '_blank', 'width=900,height=700');
+        guideWindow.document.write(html);
+    } catch (error) {
+        alert('Error loading setup guide: ' + error.message);
+    }
+}
+
+// Upload package to Microsoft Intune
+async function uploadToIntune(packageName) {
+    const button = event.target;
+    const originalText = button.innerHTML;
+
+    try {
+        // Check if Intune integration is enabled
+        if (!window.currentConfig || !window.currentConfig.IntuneIntegration || !window.currentConfig.IntuneIntegration.Enabled) {
+            alert('Intune Integration is not enabled. Please configure it in Settings first.');
+            return;
+        }
+
+        // Confirm upload
+        if (!confirm(`Upload "${packageName}" to Microsoft Intune?\n\nThis will create a new Win32 app in your Intune tenant.`)) {
+            return;
+        }
+
+        // Disable button and show progress
+        button.disabled = true;
+        button.innerHTML = '⏳ Uploading to Intune...';
+
+        const response = await fetch(`${API_BASE}/api/packages/${encodeURIComponent(packageName)}/intune/upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            button.innerHTML = '✅ Uploaded!';
+            button.classList.add('btn-success');
+
+            alert(`Successfully uploaded to Microsoft Intune!\n\nApp Name: ${result.appName || packageName}\nApp ID: ${result.appId || 'N/A'}`);
+
+            // Reset button after 3 seconds
+            setTimeout(() => {
+                button.innerHTML = originalText;
+                button.disabled = false;
+                button.classList.remove('btn-success');
+            }, 3000);
+        } else {
+            button.innerHTML = '❌ Failed';
+            button.classList.add('btn-danger');
+            alert('Failed to upload to Intune:\n\n' + result.error);
+
+            // Reset button after 3 seconds
+            setTimeout(() => {
+                button.innerHTML = originalText;
+                button.disabled = false;
+                button.classList.remove('btn-danger');
+            }, 3000);
+        }
+    } catch (error) {
+        button.innerHTML = '❌ Error';
+        button.classList.add('btn-danger');
+        alert('Error uploading to Intune: ' + error.message);
+
+        // Reset button after 3 seconds
+        setTimeout(() => {
+            button.innerHTML = originalText;
+            button.disabled = false;
+            button.classList.remove('btn-danger');
+        }, 3000);
+    }
 }
 
 // Keyboard shortcuts

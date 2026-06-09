@@ -161,7 +161,7 @@ function New-AutopilotPackage {
         `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
         `$arguments = "$silentParams"
 
-        Start-ADTMsiProcess -Action Install -FilePath `$installerPath -Parameters `$arguments
+        Start-ADTMsiProcess -Action Install -FilePath `$installerPath -ArgumentList `$arguments
 "@
 
                 # Uninstall command
@@ -170,7 +170,7 @@ function New-AutopilotPackage {
         `$installerPath = Join-Path -Path `$adtSession.DirFiles -ChildPath "$installerFile"
         `$arguments = "/qn /norestart"
 
-        Start-ADTMsiProcess -Action Uninstall -FilePath `$installerPath -Parameters `$arguments
+        Start-ADTMsiProcess -Action Uninstall -FilePath `$installerPath -ArgumentList `$arguments
 "@
             }
             else {
@@ -253,7 +253,10 @@ function New-AutopilotPackage {
                 Write-Verbose "Including PSADT 4.1.7..."
                 try {
                     $rootPath = Get-PackageFactoryRoot
-                    $psadtSourcePath = Join-Path $rootPath "Generator\PSAppDeployToolkit"
+                    # PSADT is stored in Generator/PSAppdeploytoolkit/PSAppDeployToolkit/
+                    # (User uploads complete release package, we use the toolkit subfolder)
+                    $psadtTemplatePath = Join-Path $rootPath "Generator\PSAppdeploytoolkit"
+                    $psadtSourcePath = Join-Path $psadtTemplatePath "PSAppDeployToolkit"
                     Install-PSAppDeployToolkit -SourcePath $psadtSourcePath -DestinationPath $packagePath
                 }
                 catch {

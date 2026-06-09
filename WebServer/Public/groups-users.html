@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Groups & Users - PackageFactory</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="logo">
+                <h1>👥 Groups & Users Management</h1>
+                <p class="subtitle">Manage Entra ID security groups and user memberships</p>
+            </div>
+            <div class="header-actions">
+                <button class="theme-toggle" onclick="toggleTheme()" id="theme-toggle-btn">
+                    <span class="theme-icon" id="theme-icon">🌙</span>
+                    <span id="theme-text">Dark</span>
+                </button>
+                <button class="btn btn-secondary" onclick="window.location.href='/'">🏠 Home</button>
+                <button class="btn btn-secondary" onclick="window.location.href='/intune-apps.html'">☁️ Apps</button>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <!-- Tabs -->
+            <div class="tabs">
+                <button class="tab-btn active" onclick="showTab('groups')">🏢 Groups</button>
+                <button class="tab-btn" onclick="showTab('users')">👤 Users</button>
+            </div>
+
+            <!-- Groups Tab -->
+            <div id="groupsTab" class="tab-content active">
+                <div class="search-filter-bar">
+                    <input type="text" id="groupSearch" class="search-input" placeholder="🔍 Search groups...">
+                    <span id="groupCount" class="badge">0 groups</span>
+                </div>
+
+                <div id="groupsLoading" class="loading-container"><div class="spinner"></div></div>
+                <div id="groupsContainer" style="display:none;">
+                    <table class="apps-table">
+                        <thead>
+                            <tr>
+                                <th>Group Name</th>
+                                <th>Description</th>
+                                <th>Members</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="groupsTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Users Tab -->
+            <div id="usersTab" class="tab-content">
+                <div class="search-filter-bar">
+                    <input type="text" id="userSearch" class="search-input" placeholder="🔍 Search users...">
+                    <span id="userCount" class="badge">0 users</span>
+                </div>
+
+                <div id="usersLoading" class="loading-container"><div class="spinner"></div></div>
+                <div id="usersContainer" style="display:none;">
+                    <table class="apps-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Email</th>
+                                <th>Department</th>
+                                <th>Job Title</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="usersTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="js/groups-users.js"></script>
+</body>
+</html>
